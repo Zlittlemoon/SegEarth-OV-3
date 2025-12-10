@@ -19,7 +19,6 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  bg_idx=0,
                  slide_stride=0,
                  slide_crop=0,
-                 pamr=False,
                  confidence_threshold=0.5,
                  use_sem_seg=True,
                  use_presence_score=True,
