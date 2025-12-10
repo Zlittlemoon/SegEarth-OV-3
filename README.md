@@ -57,6 +57,11 @@ Please refer to [dataset_prepare.md](https://github.com/likyoo/SegEarth-OV/blob/
 
 Download checkpoints from [HF](https://huggingface.co/facebook/sam3) or [ModelScope](https://modelscope.cn/models/facebook/sam3).
 
+## Quick Inference
+```
+python demo.py
+```
+
 ## Model evaluation
 
 ```
