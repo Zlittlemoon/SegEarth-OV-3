@@ -23,7 +23,7 @@
 
 <div>
     <h4 align="center">
-        • <a href="https://github.com/earth-insights/SegEarth-OV-3" target='_blank'>[Code]</a> • <a href="https://arxiv.org/abs/2512.08730" target='_blank'>[arXiv]</a> • <a href="https://github.com/earth-insights/SegEarth-OV-3/demo.py" target='_blank'>[Demo]</a> •
+        • <a href="https://github.com/earth-insights/SegEarth-OV-3" target='_blank'>[Code]</a> • <a href="https://arxiv.org/abs/2512.08730" target='_blank'>[arXiv]</a> • <a href="https://github.com/earth-insights/SegEarth-OV-3/blob/main/demo.py" target='_blank'>[Demo]</a> •
     </h4>
 </div>
 
