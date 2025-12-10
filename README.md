@@ -1,3 +1,5 @@
+<div align="center">
+
 <h1>SegEarth-OV3: Exploring SAM 3 for Open-Vocabulary Semantic Segmentation in Remote Sensing Images</h1>
 
 <!-- <h3></h3> -->
@@ -25,13 +27,13 @@
     </h4>
 </div>
 
-<img src="resources/vis.png" width="100%"/>
 </div>
+
+<img src="resources/vis.png" width="100%"/>
 
 > Inference results of SegEarth-OV3 on a remote sensing image exceeding 10k×10k resolution. The image originates from [OpenMapCD](https://zenodo.org/records/14028095).
 
 <img src="https://github.com/user-attachments/assets/d17ce794-9cd8-47cc-8b2c-a9b3e4739a10" width="100%"/>
-</div>
 
 > The overall inference pipeline of SegEarth-OV3. Given an input image and a list of text prompts, we leverage SAM 3's decoupled outputs. The pipeline involves: (1) instance aggregation to consolidate sparse object predictions; (2) dual-head mask fusion to combine the fine-grained instance details with the global coverage of the semantic head; and (3) presence-guided filtering (using the presence score) to suppress false positives from absent categories. "MAX" denotes the element-wise maximum operation, and "×" denotes multiplication.
 
