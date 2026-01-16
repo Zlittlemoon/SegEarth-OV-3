@@ -19,10 +19,12 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  bg_idx=0,
                  slide_stride=0,
                  slide_crop=0,
-                 confidence_threshold=0.5,
+                #  confidence_threshold=0.5,
+                 confidence_threshold=0.0,
                  use_sem_seg=True,
-                 use_presence_score=True,
-                 use_transformer_decoder=True,
+                 use_presence_score=False,
+                #  use_transformer_decoder=True,
+                 use_transformer_decoder=False,              
                  **kwargs):
         super().__init__()
         
@@ -60,7 +62,7 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                 self.processor.reset_all_prompts(inference_state)
                 inference_state = self.processor.set_text_prompt(state=inference_state, prompt=query_word)
 
-                if self.use_transformer_decoder:
+                """ if self.use_transformer_decoder:
                     if inference_state['masks_logits'].shape[0] > 0:
                         inst_len = inference_state['masks_logits'].shape[0]
                         for inst_id in range(inst_len):
@@ -77,9 +79,9 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                                     align_corners=False
                                 ).squeeze()
 
-                            seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score)
+                            seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score) """
                     
-                if self.use_sem_seg:
+                """ if self.use_sem_seg:
                     semantic_logits = inference_state['semantic_mask_logits']
                     if semantic_logits.shape != (h, w):
                             semantic_logits = F.interpolate(
@@ -89,10 +91,35 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                                 align_corners=False
                             ).squeeze()
                     
-                    seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits)
+                    seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits) """
+
+                if self.use_sem_seg:
+
+                    semantic_logits = inference_state['semantic_mask_logits']
+
+                    # --- 统一到 4D: (1,1,H,W) ---
+                    if semantic_logits.dim() == 2:          # (H, W)
+                        semantic_logits_4d = semantic_logits.unsqueeze(0).unsqueeze(0)
+                    elif semantic_logits.dim() == 3:        # (1, H, W)
+                        semantic_logits_4d = semantic_logits.unsqueeze(1)
+                    else:                                  # (1, 1, H, W) 或 (B,1,H,W)
+                        semantic_logits_4d = semantic_logits
+
+                    # --- resize ---
+                    if semantic_logits_4d.shape[-2:] != (h, w):
+                        semantic_logits_4d = F.interpolate(
+                            semantic_logits_4d,
+                            size=(h, w),
+                            mode='bilinear',
+                            align_corners=False
+                        )
+
+                    # --- 回到 (H, W) ---
+                    semantic_logits = semantic_logits_4d.squeeze()
+                    seg_logits[query_idx] = semantic_logits
                 
-                if self.use_presence_score:
-                    seg_logits[query_idx] = seg_logits[query_idx] * inference_state["presence_score"]
+                """ if self.use_presence_score:
+                    seg_logits[query_idx] = seg_logits[query_idx] * inference_state["presence_score"] """
                 
         return seg_logits
 
@@ -158,7 +185,8 @@ class SegEarthOV3Segmentation(BaseSegmentor):
             # Load original image to preserve details for SAM3
             image_path = meta.get('img_path')
             image = Image.open(image_path).convert('RGB')
-            ori_shape = meta['ori_shape']
+            # ori_shape = meta['ori_shape']
+            ori_h, ori_w = meta['ori_shape'][:2]
 
             # Determine inference mode
             if self.slide_crop > 0 and (self.slide_crop < image.size[0] or self.slide_crop < image.size[1]):
@@ -167,13 +195,21 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                 seg_logits = self._inference_single_view(image)
 
             # Resize to original shape if necessary (e.g. padding effects)
-            if seg_logits.shape[-2:] != ori_shape:
+            """ if seg_logits.shape[-2:] != ori_shape:
                 seg_logits = F.interpolate(
                     seg_logits.unsqueeze(0), 
                     size=ori_shape, 
                     mode='bilinear', 
                     align_corners=False
-                ).squeeze(0)
+                ).squeeze(0) """
+            
+            if seg_logits.shape[-2:] != (ori_h, ori_w):
+                seg_logits = F.interpolate(
+                    seg_logits.unsqueeze(0),
+                    size=(ori_h, ori_w),
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze(0)           
             
             # Post-processing
             if self.num_cls != self.num_queries:
@@ -184,13 +220,31 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                 seg_pred = seg_logits.argmax(0, keepdim=True)
 
             seg_pred = torch.argmax(seg_logits, dim=0)
+
+            """ # prompt -> class 聚合
+            if self.num_cls != self.num_queries:
+                cls_index = F.one_hot(self.query_idx, num_classes=self.num_cls)  # (num_queries, num_cls)
+                cls_index = cls_index.T.float().view(self.num_cls, self.num_queries, 1, 1)
+                class_logits = (seg_logits.unsqueeze(0) * cls_index).max(1)[0]   # (num_cls, H, W)
+            else:
+                class_logits = seg_logits
+
+            # 最终预测
+            seg_pred = class_logits.argmax(0) """
+
             
             # Apply probability threshold
             max_vals = seg_logits.max(0)[0]
             seg_pred[max_vals < self.prob_thd] = self.bg_idx
 
+            """ probs = torch.softmax(class_logits, dim=0)
+            max_probs = probs.max(0)[0]
+            seg_pred[max_probs < self.prob_thd] = self.bg_idx """
+
+
             data_samples[i].set_data({
-                'seg_logits': PixelData(**{'data': seg_logits}),
+                'class_logits': PixelData(**{'data': seg_logits}),
+                # 'class_logits': PixelData(**{'data': class_logits}),
                 'pred_sem_seg': PixelData(**{'data': seg_pred.unsqueeze(0)})
             })
             

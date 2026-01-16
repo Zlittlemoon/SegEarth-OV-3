@@ -6,6 +6,8 @@ model = dict(
     confidence_threshold=0.5,
     prob_thd=0.1,
     bg_idx=4,
+    slide_stride=512,
+    slide_crop=512,
 )
 
 # dataset settings
@@ -14,6 +16,7 @@ data_root = 'data/UDD5'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
+    # dict(type='Resize', scale=(448, 448), keep_ratio=True),
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]

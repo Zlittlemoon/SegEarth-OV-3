@@ -2,14 +2,14 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from mmseg.structures import SegDataSample
-from segearthov3_segmentor import SegEarthOV3Segmentation
+from segearthov3_segmentor_merge import SegEarthOV3Segmentation
 
-img_path = 'resources/oem_koeln_50.tif'
+img_path = 'resources/loveda_2524.png'
 
-name_list = ['background', 'bareland,barren', 'grass', 'road', 'car',
-             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
+name_list = ['background', 'building,house', 'road', 'water', 'barren,bareland,soil',
+             'forest,tree', 'agricultural']
 
-with open('./configs/my_name.txt', 'w') as writers:
+with open('./configs/my_name_test.txt', 'w') as writers:
     for i in range(len(name_list)):
         if i == len(name_list)-1:
             writers.write(name_list[i])
@@ -34,11 +34,11 @@ data_sample.set_metainfo(img_meta)
 model = SegEarthOV3Segmentation(
     type='SegEarthOV3Segmentation',
     model_type='SAM3',
-    classname_path='./configs/my_name.txt',
-    prob_thd=0.1,
-    confidence_threshold=0.1,
-    slide_stride=512,
-    slide_crop=512,
+    classname_path='./configs/my_name_test.txt',
+    prob_thd=0.5,
+    confidence_threshold=0.5,
+    slide_stride=0,
+    slide_crop=0,
 )
 
 seg_pred = model.predict(img_tensor, data_samples=[data_sample])
@@ -51,4 +51,5 @@ ax[1].imshow(seg_pred, cmap='viridis')
 ax[1].axis('off')
 plt.tight_layout()
 # plt.show()
-plt.savefig('seg_pred.png', bbox_inches='tight')
+
+plt.savefig('seg_pred_loveda_2524_0.png', bbox_inches='tight')

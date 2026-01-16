@@ -6,14 +6,17 @@ model = dict(
     prob_thd=0.1,
     confidence_threshold=0.2,
     bg_idx=5,
+    slide_stride=512,
+    slide_crop=512,
 )
 
 # dataset settings
 dataset_type = 'PotsdamDataset'
-data_root = 'data/Potsdam'
+data_root = 'data/potsdam_full_image'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
+    # dict(type='Resize', scale=(448, 448), keep_ratio=True),
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]

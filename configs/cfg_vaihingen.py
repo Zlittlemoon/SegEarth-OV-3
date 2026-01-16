@@ -6,14 +6,17 @@ model = dict(
     prob_thd=0.1,
     bg_idx=5,
     confidence_threshold=0.4,
+    slide_stride=512,
+    slide_crop=512,
 )
 
 # dataset settings
 dataset_type = 'ISPRSDataset'
-data_root = 'data/Vaihingen'
+data_root = 'data/vaihingen_full_image'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
+    # dict(type='Resize', scale=(448, 448), keep_ratio=True),
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
