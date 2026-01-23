@@ -9,4 +9,9 @@ example
 run.sh
 show_dir
 weights
-figs
+figs*.pt
+*.pth
+*.ckpt
+*.pt
+*.pth
+*.ckpt

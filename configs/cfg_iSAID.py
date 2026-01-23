@@ -5,11 +5,13 @@ model = dict(
     classname_path='./configs/cls_iSAID.txt',
     prob_thd=0.5,
     confidence_threshold=0.4,
+    slide_stride=512,
+    slide_crop=512,
 )
 
 # dataset settings
 dataset_type = 'iSAIDDataset'
-data_root = 'data/iSAID'
+data_root = 'data/isaid_full_image'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
