@@ -99,6 +99,6 @@ def check_rs_dataset_labels(dataset_path, file_exts=['.tif', '.png', '.jpg']):
 # --- 使用示例 ---
 if __name__ == "__main__":
     # 把这里的路径换成你数据集标签所在的文件夹路径
-    label_folder_path = r"data/isaid_full_image/ann_dir/train" 
+    label_folder_path = r"data/potsdam_full_image/ann_dir/val" 
     
     check_rs_dataset_labels(label_folder_path)

@@ -15,3 +15,7 @@ figs*.pt
 *.pt
 *.pth
 *.ckpt
+*.log
+train_weights
+tmp_multiproc
+.dist_test

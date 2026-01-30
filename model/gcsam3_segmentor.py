@@ -2,21 +2,16 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from mmseg.models.segmentors import BaseSegmentor
-from mmseg.models.data_preprocessor import SegDataPreProcessor
 from mmengine.structures import PixelData
+from mmseg.models.losses import DiceLoss
 from mmseg.registry import MODELS
-from mmseg.models.losses import CrossEntropyLoss
 from PIL import Image
-from torchvision.transforms import v2
+from typing import Optional, List, Dict, Tuple, Any
 
 from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
-
-# ================= 新增 import =================
-from adapter.adapter import DualSourceAdapter
 from Offline_database.prototype_utils import PrototypeManager
-# ==============================================
-
+from adapter.adapter import RemoteSensingAdapter
 
 @MODELS.register_module()
 class SegEarthOV3Segmentation(BaseSegmentor):
@@ -30,30 +25,24 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  use_sem_seg=True,
                  use_presence_score=True,
                  use_transformer_decoder=True,
-                 
-                 # ================= 新增参数 =================
-                 use_adapter=True,
                  clip_ckpt_path="weights/RemoteCLIP/RemoteCLIP-ViT-B-32.pt",
-                 feature_db_path="Offline_database/Million-AID_train_image_features.pt",
-                 # [新增] 接收你训练好的权重路径
-                 adapter_ckpt_path=None,
-                 # ===========================================
-                 
+                 database_path="Offline_database/Million-AID_train_image_features.pt",
+                 adapter_topk=5,
                  **kwargs):
         super().__init__()
         
         self.device = device
-        # Initialize SAM3 model
         model = build_sam3_image_model(
-            bpe_path=f"./sam3/assets/bpe_simple_vocab_16e6.txt.gz", 
+            bpe_path="./sam3/assets/bpe_simple_vocab_16e6.txt.gz", 
             checkpoint_path='weights/sam3/sam3.pt', 
             device="cuda"
         )
         self.processor = Sam3Processor(model, confidence_threshold=confidence_threshold, device=device)
-        self.query_words, self.query_idx = get_cls_idx(classname_path)
-        self.num_cls = max(self.query_idx) + 1
-        self.num_queries = len(self.query_idx)
-        self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
+        
+        self.query_words, self.query_class_ids = get_cls_idx(classname_path)
+        self.query_idx = torch.tensor(self.query_class_ids, dtype=torch.int64, device=device)
+        self.num_cls = int(self.query_idx.max().item()) + 1
+        self.num_queries = len(self.query_words)
 
         self.prob_thd = prob_thd
         self.bg_idx = bg_idx
@@ -63,135 +52,95 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         self.use_sem_seg = use_sem_seg
         self.use_presence_score = use_presence_score
         self.use_transformer_decoder = use_transformer_decoder
+        
+        self.proto_manager = PrototypeManager(
+            clip_ckpt_path=clip_ckpt_path,
+            database_path=database_path,
+            device=device
+        )
+        
+        self.adapter = RemoteSensingAdapter(topk=adapter_topk).to(device)
+        
+        # 缓存原型（不 squeeze，保持原始形状）
+        self.cached_prototypes = {}
+        for word in self.query_words:
+            v_ref, scores = self.proto_manager.get_prototypes([word], topk=adapter_topk)
+            self.cached_prototypes[word] = (v_ref, scores)  # [1, topk, 512], [1, topk]
 
-        # [修改点 1] 初始化 Adapter 和 原型管理器
-        # ============================================================
-        self.use_adapter = use_adapter
-        if self.use_adapter:
-            # 1. 初始化 Adapter
-            # clip_dim=512 (RemoteCLIP), sam_dim=256 (SAM Decoder Input)
-            self.adapter = DualSourceAdapter(clip_dim=512, sam_dim=256).to(device)
-            # [新增] 核心逻辑：如果提供了权重路径，就加载它！
-            if adapter_ckpt_path is not None:
-                print(f"[Adapter] Loading trained weights from: {adapter_ckpt_path}")
-                # 加载权重 (map_location处理多卡到单卡的情况)
-                state_dict = torch.load(adapter_ckpt_path, map_location=device)
-                
-                # 处理可能的 key 不匹配 (例如多卡训练时带 module. 前缀)
-                # 因为你保存的是 model.module.adapter.state_dict()，所以 key 应该是干净的
-                # 直接加载即可
-                missing, unexpected = self.adapter.load_state_dict(state_dict, strict=False)
-                print(f"[Adapter] Weights loaded. Missing: {len(missing)}, Unexpected: {len(unexpected)}")
-            else:
-                print("[Adapter] No pretrained weights provided. Initializing randomly (Valid for Training only).")
+    @staticmethod
+    def _get_fpn(backbone_out):
+        if "backbone_fpn" in backbone_out:
+            return backbone_out["backbone_fpn"]
+        raise RuntimeError("Cannot find backbone_fpn in backbone_out.")
 
-            # 2. 初始化管理器 (加载大文件)
-            self.proto_manager = PrototypeManager(
-                clip_ckpt_path=clip_ckpt_path,
-                database_path=feature_db_path,
-                device=device
-            )
-            
-            # 3. [预取策略] 提前把所有类别的原型检索好，存入缓存
-            # 这样 inference 时不用重复跑 CLIP text encoder
-            print("Pre-computing prototypes for all classes...")
-            self.cached_prototypes = {} # 字典: class_word -> (v_ref, scores)
-            
-            # 批量检索 (Batch Retrieval)
-            # v_refs: [Num_Cls, K, 512], scores: [Num_Cls, K]
-            v_refs, scores = self.proto_manager.get_prototypes(self.query_words, topk=5)
-            
-            for i, word in enumerate(self.query_words):
-                self.cached_prototypes[word] = (v_refs[i], scores[i])
-            print("Prototypes ready.")
-        # ============================================================        
+    @staticmethod
+    def _set_fpn(backbone_out, fpn_list):
+        backbone_out["backbone_fpn"] = fpn_list
+
+    def _get_state_value(self, state, keys):
+        """容错获取 state 中的值"""
+        for k in keys:
+            if k in state and state[k] is not None:
+                return state[k]
+        return None
 
     def _inference_single_view(self, image):
-            w, h = image.size
-            seg_logits = torch.zeros((self.num_queries, h, w), device=self.device)
+        w, h = image.size
+        seg_logits = torch.zeros((self.num_queries, h, w), device=self.device)
 
-            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                inference_state = self.processor.set_image(image)
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            inference_state = self.processor.set_image(image)
+            backbone_out = inference_state["backbone_out"]
+            fpn_feats_orig = self._get_fpn(backbone_out)
+            fpn_backup = [f.clone() for f in fpn_feats_orig]  # 深拷贝备份
 
-                # Robustness check for keys
-                backbone_out = inference_state["backbone_out"]
-                fpn_feats_list = None
+            for q_idx, query_word in enumerate(self.query_words):
+                # 每次循环重新克隆备份
+                fpn_feats = [f.clone() for f in fpn_backup]
                 
-                # [修复开始] ==========================================================
-                # 1. 优先检查 sam2_backbone_out，且必须不为 None
-                if "sam2_backbone_out" in backbone_out and backbone_out["sam2_backbone_out"] is not None:
-                    if "backbone_fpn" in backbone_out["sam2_backbone_out"]:
-                        fpn_feats_list = backbone_out["sam2_backbone_out"]["backbone_fpn"]
+                # 获取原型（缓存的是 [1, topk, 512]）
+                prototypes, proto_scores = self.cached_prototypes[query_word]
                 
-                # 2. 如果上面没取到，或者 sam2_backbone_out 是 None，尝试直接取 backbone_fpn
-                if fpn_feats_list is None and "backbone_fpn" in backbone_out:
-                    fpn_feats_list = backbone_out["backbone_fpn"]
+                # 应用 adapter
+                enhanced_fpn = self.adapter(fpn_feats, prototypes, proto_scores)
+                self._set_fpn(backbone_out, enhanced_fpn)
                 
-                # 3. 如果还是 None，说明提取失败，抛出异常或跳过
-                if fpn_feats_list is None:
-                    # 打印一下当前的 keys 方便调试
-                    raise RuntimeError(f"Could not find 'backbone_fpn'. Keys: {backbone_out.keys()}")
-                # [修复结束] ==========================================================
+                self.processor.reset_all_prompts(inference_state)
+                inference_state = self.processor.set_text_prompt(state=inference_state, prompt=query_word)
 
-                if self.use_adapter and fpn_feats_list is not None:
-                    feat_backup = [f.clone() for f in fpn_feats_list]
+                # 容错获取输出
+                masks_logits = self._get_state_value(inference_state, 
+                    ("masks_logits", "pred_masks", "pred_masks_logits", "masks"))
+                object_score = self._get_state_value(inference_state, 
+                    ("object_score", "pred_iou_scores", "iou_scores"))
+                semantic_logits = self._get_state_value(inference_state, 
+                    ("semantic_mask_logits", "semantic_logits", "pred_semantic_logits"))
+                presence_score = self._get_state_value(inference_state, 
+                    ("presence_score", "pred_presence_score"))
 
-                for query_idx, query_word in enumerate(self.query_words):
-                    self.processor.reset_all_prompts(inference_state)
+                if self.use_transformer_decoder and masks_logits is not None:
+                    # 兼容多种形状
+                    if masks_logits.ndim == 4:  # [N,1,H,W] 或 [B,N,H,W]
+                        if masks_logits.shape[0] == 1:
+                            masks_logits = masks_logits.squeeze(0)
+                    if masks_logits.ndim == 3 and masks_logits.shape[0] > 1:  # [N,H,W]
+                        for inst_id in range(masks_logits.shape[0]):
+                            inst_logit = masks_logits[inst_id]
+                            score = object_score[inst_id] if object_score is not None else 1.0
+                            if inst_logit.shape != (h, w):
+                                inst_logit = F.interpolate(inst_logit[None, None], size=(h, w), mode='bilinear', align_corners=False).squeeze()
+                            seg_logits[q_idx] = torch.max(seg_logits[q_idx], inst_logit * score)
 
-                    if self.use_adapter and fpn_feats_list is not None:
-                        # Reset
-                        for i, f in enumerate(feat_backup):
-                            fpn_feats_list[i] = f.clone()
+                if self.use_sem_seg and semantic_logits is not None:
+                    sem = semantic_logits.squeeze()  # 去掉多余维度 → [H, W] 或 [1, H, W] → squeeze
+                    if sem.dim() == 3 and sem.shape[0] == 1:
+                        sem = sem.squeeze(0)
+                    seg_logits[q_idx] = torch.max(seg_logits[q_idx], sem)
 
-                        if query_word in self.cached_prototypes:
-                            v_ref, v_scores = self.cached_prototypes[query_word]
-                            v_ref_b = v_ref.unsqueeze(0)
-                            v_scores_b = v_scores.unsqueeze(0)
-                            
-                            for i in range(len(fpn_feats_list)):
-                                feat_map = fpn_feats_list[i]
-                                B, C, H_f, W_f = feat_map.shape
-                                
-                                # Flatten Query
-                                q_local = feat_map.flatten(2).transpose(1, 2)
-                                
-                                # [OOM Fix] Downsample Global Context (e.g., to 32x32)
-                                # This reduces sequence length from 65536 to 1024
-                                v_global_map = F.adaptive_avg_pool2d(feat_map, (32, 32)) 
-                                v_global = v_global_map.flatten(2).transpose(1, 2)
+                if self.use_presence_score and presence_score is not None:
+                    seg_logits[q_idx] *= presence_score
 
-                                enhanced_q = self.adapter(q_local, v_ref_b, v_scores_b, v_global)
-                                fpn_feats_list[i] = enhanced_q.transpose(1, 2).view(B, C, H_f, W_f)
-
-                    inference_state = self.processor.set_text_prompt(state=inference_state, prompt=query_word)
-
-                    if self.use_transformer_decoder:
-                        if inference_state['masks_logits'].shape[0] > 0:
-                            inst_len = inference_state['masks_logits'].shape[0]
-                            for inst_id in range(inst_len):
-                                instance_logits = inference_state['masks_logits'][inst_id].squeeze()
-                                instance_score = inference_state['object_score'][inst_id]
-                                
-                                if instance_logits.shape != (h, w):
-                                    instance_logits = F.interpolate(
-                                        instance_logits.view(1, 1, *instance_logits.shape), 
-                                        size=(h, w), mode='bilinear', align_corners=False
-                                    ).squeeze()
-                                seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score)
-                        
-                        if self.use_sem_seg:
-                            semantic_logits = inference_state['semantic_mask_logits']
-                            if semantic_logits.shape != (h, w):
-                                semantic_logits = F.interpolate(
-                                    semantic_logits, size=(h, w), mode='bilinear', align_corners=False
-                                ).squeeze()
-                            seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits)
-                        
-                        if self.use_presence_score:
-                            seg_logits[query_idx] = seg_logits[query_idx] * inference_state["presence_score"]
-                    
-            return seg_logits
+        return seg_logits
 
     def slide_inference(self, image, stride, crop_size):
         """Inference by sliding-window with overlap using PIL cropping."""
@@ -219,17 +168,13 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                 y2 = min(y1 + h_crop, h_img)
                 x2 = min(x1 + w_crop, w_img)
                 
-                # Adjust start points to ensure crop size is valid at boundaries
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 
-                # Crop via PIL
                 crop_img = image.crop((x1, y1, x2, y2))
                 
-                # Inference on crop
                 crop_seg_logit = self._inference_single_view(crop_img)
                 
-                # Accumulate results
                 preds[:, y1:y2, x1:x2] += crop_seg_logit
                 count_mat[:, y1:y2, x1:x2] += 1
 
@@ -242,7 +187,6 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         if data_samples is not None:
             batch_img_metas = [data_sample.metainfo for data_sample in data_samples]
         else:
-            # Fallback for meta info construction
             batch_img_metas = [
                 dict(
                     ori_shape=inputs.shape[2:],
@@ -250,396 +194,212 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                     pad_shape=inputs.shape[2:],
                     padding_size=[0, 0, 0, 0])
             ] * inputs.shape[0]
-        
+
         for i, meta in enumerate(batch_img_metas):
-            # Load original image to preserve details for SAM3
-            image_path = meta.get('img_path')
-            image = Image.open(image_path).convert('RGB')
-            ori_shape = meta['ori_shape']
+                image_path = meta.get('img_path')
+                image = Image.open(image_path).convert('RGB')
+                ori_shape = meta['ori_shape']
 
-            # Determine inference mode
-            if self.slide_crop > 0 and (self.slide_crop < image.size[0] or self.slide_crop < image.size[1]):
+                # 强制使用滑动窗口（验证大图必须这样，避免 evaluator 问题）
                 seg_logits = self.slide_inference(image, self.slide_stride, self.slide_crop)
-            else:
-                seg_logits = self._inference_single_view(image)
 
-            # Resize to original shape if necessary (e.g. padding effects)
-            if seg_logits.shape[-2:] != ori_shape:
-                seg_logits = F.interpolate(
-                    seg_logits.unsqueeze(0), 
-                    size=ori_shape, 
-                    mode='bilinear', 
-                    align_corners=False
-                ).squeeze(0)
-            
-            # Post-processing
-            if self.num_cls != self.num_queries:
-                seg_logits = seg_logits.unsqueeze(0)
-                cls_index = nn.functional.one_hot(self.query_idx)
-                cls_index = cls_index.T.view(self.num_cls, len(self.query_idx), 1, 1)
-                seg_logits = (seg_logits * cls_index).max(1)[0]
-                seg_pred = seg_logits.argmax(0, keepdim=True)
+                # 如果累积后尺寸不对，resize
+                if seg_logits.shape[-2:] != ori_shape:
+                    seg_logits = F.interpolate(
+                        seg_logits.unsqueeze(0),
+                        size=ori_shape,
+                        mode='bilinear',
+                        align_corners=False
+                    ).squeeze(0)
 
-            seg_pred = torch.argmax(seg_logits, dim=0)
-            
-            # Apply probability threshold
-            max_vals = seg_logits.max(0)[0]
-            seg_pred[max_vals < self.prob_thd] = self.bg_idx
+                # 确保 seg_pred 是 long 类别索引
+                seg_pred = torch.argmax(seg_logits, dim=0).long()
 
-            data_samples[i].set_data({
-                'seg_logits': PixelData(**{'data': seg_logits}),
-                'pred_sem_seg': PixelData(**{'data': seg_pred.unsqueeze(0)})
-            })
-            
+                # 打印检查（调试用，可删除）
+                print("seg_pred shape:", seg_pred.shape)
+                print("seg_pred unique:", torch.unique(seg_pred))
+
+                # 设置 pred_sem_seg（确保 [1, H, W] long）
+                data_samples[i].pred_sem_seg = PixelData(data=seg_pred.unsqueeze(0))
+                data_samples[i].seg_logits = PixelData(data=seg_logits)
+
         return data_samples
-
-    def _forward(self, image):
-            """
-            训练专用的前向传播 (修复 Mask 尺寸不匹配问题: 动态获取 H_mask, W_mask)
-            """
-            w, h = image.size 
             
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # 1. Set Image (Batch=1)
-                image_tensor = v2.functional.to_image(image).to(self.device)
-                image_tensor = self.processor.transform(image_tensor).unsqueeze(0) 
+    def _compose_query_logit_baseline(
+        self,
+        masks_logits: Optional[torch.Tensor],
+        object_score: Optional[torch.Tensor],
+        semantic_logits: Optional[torch.Tensor],
+        presence_score: Optional[torch.Tensor],
+        out_hw: Tuple[int, int],
+    ) -> torch.Tensor:
+        H, W = out_hw
+        B = masks_logits.shape[0] if masks_logits is not None else 1
 
-                with torch.no_grad():
-                    backbone_out = self.processor.model.backbone.forward_image(image_tensor)
-                
-                # --- FPN Feature Lookup ---
-                fpn_feats_list = None
-                if "sam2_backbone_out" in backbone_out and backbone_out["sam2_backbone_out"] is not None:
-                    if "backbone_fpn" in backbone_out["sam2_backbone_out"]:
-                        fpn_feats_list = backbone_out["sam2_backbone_out"]["backbone_fpn"]
-                
-                if fpn_feats_list is None and "backbone_fpn" in backbone_out:
-                    fpn_feats_list = backbone_out["backbone_fpn"]
+        seg = torch.zeros((B, H, W), device=self.device, dtype=torch.float32)
 
-                if fpn_feats_list is None:
-                    raise KeyError("Critical Error: Feature Pyramid not found.")
+        # instance masks（向量化上采样 + max）
+        if self.use_transformer_decoder and masks_logits is not None:
+            m = masks_logits  # [B, N, H_low, W_low]
+            if m.ndim == 5:
+                m = m.squeeze(2)
+            if m.ndim == 4 and m.shape[1] == 1:
+                m = m.squeeze(1)
 
-                # Inst Interactive Predictor Logic
-                inst_interactivity_en = self.processor.model.inst_interactive_predictor is not None
-                if inst_interactivity_en and "sam2_backbone_out" in backbone_out:
-                    sam2_out = backbone_out["sam2_backbone_out"]
-                    if sam2_out is not None and "backbone_fpn" in sam2_out:
-                        if hasattr(self.processor.model.inst_interactive_predictor.model.sam_mask_decoder, 'conv_s0'):
-                            with torch.no_grad():
-                                sam2_out["backbone_fpn"][0] = (
-                                    self.processor.model.inst_interactive_predictor.model.sam_mask_decoder.conv_s0(
-                                        sam2_out["backbone_fpn"][0]
-                                    )
-                                )
-                                sam2_out["backbone_fpn"][1] = (
-                                    self.processor.model.inst_interactive_predictor.model.sam_mask_decoder.conv_s1(
-                                        sam2_out["backbone_fpn"][1]
-                                    )
-                                )
+            scores = object_score if object_score is not None else torch.ones((B, m.shape[1]), device=self.device)
 
-                inference_state = {
-                    "original_height": h,
-                    "original_width": w,
-                    "backbone_out": backbone_out, 
-                    "geometric_prompt": self.processor.model._get_dummy_prompt()
-                }
-                
-                if self.use_adapter:
-                    feat_backup = [f.clone() for f in fpn_feats_list]
+            # 一次性上采样所有 instance
+            m_up = F.interpolate(
+                m.view(B * m.shape[1], 1, m.shape[2], m.shape[3]), 
+                size=(H, W), 
+                mode='bilinear', 
+                align_corners=False
+            ).view(B, m.shape[1], H, W)  # [B, N, H, W]
 
-                final_logits = torch.zeros((self.num_cls, h, w), device=self.device)
-                final_logits.fill_(-100.0) 
+            # 加权
+            m_up = m_up * scores.view(B, m.shape[1], 1, 1)
 
-                # Loop Classes
-                for query_idx, query_word in enumerate(self.query_words):
-                    if "backbone_out" in inference_state:
-                        for key in ["language_features", "language_mask", "language_embeds"]:
-                            inference_state["backbone_out"].pop(key, None)
-                    for key in ["boxes", "masks", "masks_logits", "scores"]:
-                        inference_state.pop(key, None)
+            # 对 N 维度取 max
+            seg = torch.max(m_up, dim=1)[0]  # [B, H, W]
 
-                    # --- Adapter Injection ---
-                    if self.use_adapter:
-                        for i, f in enumerate(feat_backup):
-                            fpn_feats_list[i] = f.clone()
-                        
-                        if query_word in self.cached_prototypes:
-                            v_ref, v_scores = self.cached_prototypes[query_word]
-                            v_ref_b = v_ref.unsqueeze(0)   
-                            v_scores_b = v_scores.unsqueeze(0) 
+        # semantic（单次上采样）
+        if self.use_sem_seg and semantic_logits is not None:
+            sem = semantic_logits
+            if sem.ndim == 4 and sem.shape[1] == 1:
+                sem = sem.squeeze(1)
 
-                            for i in range(len(fpn_feats_list)):
-                                feat_map = fpn_feats_list[i]
-                                B, C, H_f, W_f = feat_map.shape
-                                q_local = feat_map.flatten(2).transpose(1, 2)
-                                
-                                v_global_map = F.adaptive_avg_pool2d(feat_map, (32, 32)) 
-                                v_global = v_global_map.flatten(2).transpose(1, 2)
+            sem_up = F.interpolate(
+                sem.view(B, 1, sem.shape[1], sem.shape[2]), 
+                size=(H, W), 
+                mode='bilinear', 
+                align_corners=False
+            ).squeeze(1)  # [B, H, W]
 
-                                enhanced_q = self.adapter(q_local, v_ref_b, v_scores_b, v_global)
-                                fpn_feats_list[i] = enhanced_q.transpose(1, 2).view(B, C, H_f, W_f)
+            seg = torch.max(seg, sem_up)
 
-                    with torch.no_grad():
-                        text_outputs = self.processor.model.backbone.forward_text([query_word], device=self.device)
-                    inference_state["backbone_out"].update(text_outputs)
+        # presence
+        if self.use_presence_score and presence_score is not None:
+            # presence_score may be [B] or [B,1] or [B, Q]. Ensure [B, 1, 1] when per-query already folded.
+            if presence_score.dim() == 1:
+                ps = presence_score.view(B, 1, 1)
+            else:
+                ps = presence_score.view(B, 1, 1)
+            seg = seg * ps
 
-                    outputs = self.processor.model.forward_grounding(
-                        backbone_out=inference_state["backbone_out"],
-                        find_input=self.processor.find_stage,
-                        geometric_prompt=inference_state["geometric_prompt"],
-                        find_target=None,
-                    )
-
-                    # ================================================================
-                    # [核心修复] 动态获取 Mask 尺寸 + Batch 处理
-                    # ================================================================
-                    out_logits = outputs["pred_logits"] 
-                    out_masks = outputs["pred_masks"]   
-                    presence_logit = outputs["presence_logit_dec"]
-
-                    # 1. 强制移除 Batch 维度
-                    if out_logits.shape[0] == 1:
-                        out_logits = out_logits.squeeze(0) # [N] or [N, 1]
-                    
-                    if out_masks.shape[0] == 1:
-                        out_masks = out_masks.squeeze(0)   # [N, 1, H_mask, W_mask]
-
-                    if out_masks.ndim == 4 and out_masks.shape[1] == 1:
-                        out_masks = out_masks.squeeze(1)   # [N, H_mask, W_mask]
-
-                    N_inst = out_masks.shape[0]
-                    
-                    # [关键修复] 动态获取 Mask 高宽，不再写死 256
-                    H_mask, W_mask = out_masks.shape[-2:] 
-                    
-                    if N_inst > 0:
-                        obj_scores_all = out_logits.sigmoid().view(-1, 1, 1)
-                        
-                        # 使用动态获取的尺寸初始化
-                        running_max_prob = torch.zeros((H_mask, W_mask), device=self.device, dtype=torch.float32)
-                        CHUNK_SIZE = 512
-                        
-                        for start in range(0, N_inst, CHUNK_SIZE):
-                            end = min(start + CHUNK_SIZE, N_inst)
-                            
-                            chunk_masks = out_masks[start:end].sigmoid().to(torch.float32)
-                            chunk_scores = obj_scores_all[start:end].to(torch.float32)
-                            
-                            chunk_probs = chunk_masks * chunk_scores 
-                            chunk_max, _ = chunk_probs.max(dim=0)
-                            running_max_prob = torch.max(running_max_prob, chunk_max)
-                            
-                            del chunk_masks, chunk_scores, chunk_probs, chunk_max
-                        
-                        if self.use_presence_score:
-                            presence_prob = presence_logit.sigmoid().to(torch.float32)
-                            if presence_prob.numel() > 1:
-                                presence_prob = presence_prob.mean()
-                            running_max_prob = running_max_prob * presence_prob
-
-                        final_cls_prob = F.interpolate(
-                            running_max_prob.unsqueeze(0).unsqueeze(0), 
-                            size=(h, w), 
-                            mode="bilinear", 
-                            align_corners=False
-                        ).squeeze()
-
-                        final_cls_prob = torch.clamp(final_cls_prob, 1e-6, 1-1e-6)
-                        final_cls_logit = torch.logit(final_cls_prob)
-                        final_logits[query_idx] = final_cls_logit
-                    
-                return final_logits
+        return seg
     
-    def inference(self, img, batch_img_metas):
-        """
-        """
-
-    def encode_decode(self, inputs, batch_img_metas):
-        """
-        """
+    def _forward(self, inputs, data_samples):
+        pass  # Stub
     
     def extract_feat(self, inputs):
-        """
-        """
+        pass  # Stub
+    
+    def encode_decode(self, inputs, batch_img_metas):
+        pass  # Stub
     
     def loss(self, inputs, data_samples):
-            """
-            显存优化版 Loss 计算：Iterative Backward
-            """
-            # 获取 image 和 gt
-            img_path = data_samples[0].metainfo["img_path"]
-            image = Image.open(img_path).convert("RGB")
-            w, h = image.size
-            
-            device = inputs.device
-            gt = data_samples[0].gt_sem_seg.data.squeeze(0).to(device) # [H, W]
+        """
+        inputs: [B, 3, H, W]
+        data_samples: list[SegDataSample]
+        """
+        device = inputs.device
+        B = inputs.shape[0]
+        criterion = nn.CrossEntropyLoss(ignore_index=255)
 
-            # ==========================================================
-            # 1. 预处理图像和 Backbone (这一步只做一次，不费显存)
-            # ==========================================================
-            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                image_tensor = v2.functional.to_image(image).to(device)
-                image_tensor = self.processor.transform(image_tensor).unsqueeze(0)
-                backbone_out = self.processor.model.backbone.forward_image(image_tensor)
+        # 收集 gt；保留 255 不映射，让 CE 的 ignore_index=255 忽略
+        gts = []
+        for ds in data_samples:
+            gt = ds.gt_sem_seg.data.squeeze(0).clone()  # [H, W]
+            gts.append(gt)
+        gt = torch.stack(gts).long().to(device)  # [B, H, W]，可含 255
 
-                # 提取 FPN (逻辑同你原代码)
-                fpn_feats_list = None
-                # 1. 优先尝试从 sam2_backbone_out 获取，并确保它不是 None
-                if "sam2_backbone_out" in backbone_out and backbone_out["sam2_backbone_out"] is not None:
-                    if "backbone_fpn" in backbone_out["sam2_backbone_out"]:
-                        fpn_feats_list = backbone_out["sam2_backbone_out"]["backbone_fpn"]
-                
-                # 2. 如果上面没拿到，尝试直接从 backbone_out 获取
-                if fpn_feats_list is None and "backbone_fpn" in backbone_out:
-                    fpn_feats_list = backbone_out["backbone_fpn"]
+        # Step 1: backbone forward_image (冻结)
+        with torch.no_grad():
+            backbone_out = self.processor.model.backbone.forward_image(inputs)  # 只图像
 
-                # 3. 终极检查：如果没有拿到特征，抛出清晰的错误
-                if fpn_feats_list is None:
-                    available_keys = list(backbone_out.keys())
-                    raise RuntimeError(f"Cannot find 'backbone_fpn' in output. Available keys: {available_keys}")
-                
-                feat_backup = [f.clone() for f in fpn_feats_list]
+        # Step 2: 为所有 query_word 提前编码文本（batch 处理）
+        all_txt_feats = []
+        all_txt_masks = []
+        for query_word in self.query_words:
+            text_out = self.processor.model.backbone.forward_text([query_word] * B, device=device)
+            all_txt_feats.append(text_out['language_features'])  # [B, seq_len_text, 256]
+            all_txt_masks.append(text_out['language_mask'])      # [B, seq_len_text]
+        # 堆叠成 [num_queries, B, seq_len, 256] 等
 
-            # ==========================================================
-            # 2. 循环计算 Loss 并即时 Backward (O(1) 显存核心)
-            # ==========================================================
-            total_loss_value = 0.0 # 用于记录数值打印，不用于梯度
-            
-            # 使用 BCEWithLogitsLoss 代替 CE Loss
-            # 针对每个像素：是该类(1) 还是 不是该类(0)
-            criterion = nn.BCEWithLogitsLoss() 
+        fpn_feats = self._get_fpn(backbone_out)
+        fpn_backup = [f.clone() for f in fpn_feats]
 
-            for query_idx, query_word in enumerate(self.query_words):
-                # 2.1 准备 GT：将多分类 GT 转为当前类别的二分类 Mask (0 或 1)
-                # 忽略 255 区域
-                valid_mask = (gt != 255)
-                target_mask = torch.zeros_like(gt, dtype=torch.float32)
-                target_mask[valid_mask & (gt == query_idx)] = 1.0
-                target_mask[valid_mask & (gt != query_idx)] = 0.0
-                
-                # 如果该类别在图中完全不存在，且你希望节省时间，可以跳过 (可选)
-                # if target_mask.sum() == 0: continue 
+        seg_logits_list = []  # 收集每个 query 的 logit
 
-                # 开启混合精度和梯度记录
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # --- 重置特征 ---
-                    # 每次迭代必需使用原始特征的拷贝，否则特征会被 Adapter 越改越乱
-                    current_fpn = [f.clone() for f in feat_backup] 
+        for q_i, query_word in enumerate(self.query_words):
+            fpn_feats = [f.clone() for f in fpn_backup]
 
-                    # --- 准备 Prompt 状态 ---
-                    inference_state = {
-                        "original_height": h, "original_width": w,
-                        "backbone_out": backbone_out.copy(), # 浅拷贝字典
-                        "geometric_prompt": self.processor.model._get_dummy_prompt()
-                    }
+            # adapter 增强（每个 query 独立）
+            prototypes, proto_scores = self.cached_prototypes[query_word]
+            prototypes = prototypes.expand(B, -1, -1)
+            proto_scores = proto_scores.expand(B, -1)
 
-                    # --- Adapter (有梯度!) ---
-                    if self.use_adapter:
-                        # 检索 Prototype (缓存)
-                        if query_word in self.cached_prototypes:
-                            v_ref, v_scores = self.cached_prototypes[query_word]
-                            v_ref_b, v_scores_b = v_ref.unsqueeze(0), v_scores.unsqueeze(0)
-                            
-                            for i in range(len(current_fpn)):
-                                feat_map = current_fpn[i]
-                                B_f, C_f, H_f, W_f = feat_map.shape
-                                q_local = feat_map.flatten(2).transpose(1, 2)
-                                
-                                # 全局池化减少显存
-                                v_global = F.adaptive_avg_pool2d(feat_map, (32, 32)).flatten(2).transpose(1, 2)
-                                
-                                # Adapter 前向
-                                enhanced_q = self.adapter(q_local, v_ref_b, v_scores_b, v_global)
-                                current_fpn[i] = enhanced_q.transpose(1, 2).view(B_f, C_f, H_f, W_f)
-                    
-                    # --- SAM Decoder (冻结，但需要传递 Adapter 的梯度) ---
-                    # 注意：这里我们临时把 current_fpn 塞回 inference_state
-                    # 这一步依赖具体 SAM3 实现，假设它是引用传递
-                    # [修复] 塞回特征时，必须检查 sam2_backbone_out 是否为 None
-                    if "sam2_backbone_out" in inference_state["backbone_out"] and \
-                    inference_state["backbone_out"]["sam2_backbone_out"] is not None:
-                        inference_state["backbone_out"]["sam2_backbone_out"]["backbone_fpn"] = current_fpn
-                    else:
-                        # 如果 sam2_backbone_out 是 None，说明特征是从外层 backbone_fpn 取的
-                        # 所以我们要塞回外层
-                        inference_state["backbone_out"]["backbone_fpn"] = current_fpn
+            enhanced_fpn = self.adapter(fpn_feats, prototypes, proto_scores)
+            self._set_fpn(backbone_out, enhanced_fpn)
 
-                    # 获取 Text Feature
-                    with torch.no_grad():
-                        text_outputs = self.processor.model.backbone.forward_text([query_word], device=device)
-                    inference_state["backbone_out"].update(text_outputs)
+            # Step 3: 注入当前 query 的文本特征
+            current_text_out = self.processor.model.backbone.forward_text([query_word] * B, device=device)
+            backbone_out.update(current_text_out)  # 添加 language_features 等
 
-                    # Decoder 前向
-                    outputs = self.processor.model.forward_grounding(
-                        backbone_out=inference_state["backbone_out"],
-                        find_input=self.processor.find_stage,
-                        geometric_prompt=inference_state["geometric_prompt"],
-                        find_target=None  # <--- ✅ 补上这个参数
-                    )
+            # forward_grounding
+            outputs = self.processor.model.forward_grounding(
+                backbone_out=backbone_out,
+                find_input=self.processor.find_stage,
+                geometric_prompt=self.processor.model._get_dummy_prompt(),
+                find_target=None
+            )
 
-                    # --- 后处理 Logits ---
-                    # 这里只取第0个 query 的结果 (因为我们只输出了单类)
-                    # SAM3 输出通常是 [Batch, Queries, H, W] -> [1, 1, H, W]
-                    pred_logits = outputs["pred_logits"] 
-                    
-                    # 插值对齐 GT
-                    # [DEBUG] 打印形状（调试完可注释掉）
-                    # print(f"Raw logits shape: {pred_logits.shape}")
+            # 提取并 compose logit（同推理逻辑）
+            masks_logits = self._get_state_value(outputs, ("masks_logits", "pred_masks", "pred_masks_logits"))
+            object_score = self._get_state_value(outputs, ("object_score", "pred_iou_scores", "iou_scores"))
+            semantic_logits = self._get_state_value(outputs, ("semantic_mask_logits", "semantic_logits"))
+            presence_score = self._get_state_value(outputs, ("presence_score", "pred_presence_score"))
 
-                    # [修复] interpolate 要求输入必须是 4D (B, C, H, W)
-                    # 如果当前是 3D (例如 [1, H, W])，需要 unsqueeze 出 Channel 维度
-                    if pred_logits.ndim == 3:
-                        pred_logits = pred_logits.unsqueeze(1) # 变成 [1, 1, H, W]
+            logit = self._compose_query_logit_baseline(
+                masks_logits=masks_logits,
+                object_score=object_score,
+                semantic_logits=semantic_logits,
+                presence_score=presence_score,
+                out_hw=(gt.shape[1], gt.shape[2])
+            )  # 返回 [B, H, W]
 
-                    # 插值对齐 GT
-                    if pred_logits.shape[-2:] != gt.shape:
-                        pred_logits = F.interpolate(
-                            pred_logits, 
-                            size=gt.shape, 
-                            mode="bilinear", 
-                            align_corners=False
-                        )
-                    
-                    # 恢复成 2D [H, W] 用于计算 Loss
-                    pred_logits = pred_logits.squeeze() 
+            seg_logits_list.append(logit.unsqueeze(1))  # [B, 1, H, W]
 
-                    # --- 计算单类 Loss ---
-                    # 忽略 255 区域
-                    # target_mask 已经在循环开头定义好了
-                    
-                    # [新增] 关键检查：如果这张图全是 255，或者当前类别区域全是 255
-                    # 有效像素数 = 0 -> 导致 BCE Loss = NaN
-                    if valid_mask.sum() == 0:
-                        continue  # 直接跳过，不计算 Loss，也不 Backward
+        # 聚合多词到类级别
+        seg_logits = torch.cat(seg_logits_list, dim=1)  # [B, Q, H, W]
+        if self.num_cls != self.num_queries:
+            # build mapping mask: [Q, C] where mask[q, c] = 1 if query q -> class c
+            q2c = F.one_hot(self.query_idx, num_classes=self.num_cls).to(seg_logits.dtype)  # [Q, C]
+            # reshape to [1, Q, 1, 1, C] and seg_logits [B, Q, H, W] -> [B, Q, H, W, 1]
+            # compute masked values and take max over Q for each class
+            seg_exp = seg_logits.unsqueeze(-1)  # [B, Q, H, W, 1]
+            mask = q2c.unsqueeze(0).unsqueeze(2).unsqueeze(2)  # [1, Q, 1, 1, C]
+            masked = seg_exp * mask  # [B, Q, H, W, C]
+            seg_by_class, _ = masked.max(dim=1)  # [B, H, W, C]
+            seg_logits = seg_by_class.permute(0, 3, 1, 2).contiguous()  # [B, C, H, W]
+        else:
+            # queries already correspond to classes one-to-one
+            seg_logits = seg_logits  # [B, C, H, W] if Q == C
 
-                    # 只在有效区域计算
-                    loss_i = criterion(pred_logits[valid_mask], target_mask[valid_mask])
+        # 扩展到 batch
+        seg_logits = seg_logits.expand(B, -1, -1, -1)  # [B, num_cls, H, W]
 
-                    # 防止 squeeze 过度（例如 Batch=1, H=512, W=512 被压成 [512, 512]，这是对的）
-                    # 但如果刚好 H 或 W 是 1，可能会出错。加个保险：
-                    if pred_logits.ndim == 3: # 如果还是 [1, 512, 512]
-                        pred_logits = pred_logits.squeeze(0)
+        # CE loss
+        loss_ce = criterion(seg_logits, gt)
 
-                    # --- 计算单类 Loss ---
-                    # 只在有效区域计算 (排除 255)
-                    loss_i = criterion(pred_logits[valid_mask], target_mask[valid_mask])
-                
-                # ==========================================================
-                # 3. 立即反向传播并释放显存 (Critical Step)
-                # ==========================================================
-                # 注意：因为我们在外部循环累积梯度，所以如果是 Batch>1，需要除以累积步数
-                # 但这里我们已经在内部解决了，直接 Backward
-                
-                # 这里的 loss_i 是计算图的一部分，backward 会把梯度传回 Adapter
-                loss_i.backward() 
-                
-                total_loss_value += loss_i.item()
+        # Dice loss（正确初始化）
+        criterion_dice = DiceLoss(use_sigmoid=False, ignore_index=255)
+        loss_dice = criterion_dice(seg_logits, gt)
 
-                # 手动删除计算图起点，断开连接，释放显存
-                del pred_logits, loss_i, current_fpn, inference_state, outputs
-            
-            # 返回平均 Loss 用于日志记录 (此时只是一个 float，没有梯度了)
-            return dict(loss_seg=total_loss_value / len(self.query_words))
+        # 总 loss
+        loss_seg = loss_ce + 0.5 * loss_dice  # 权重可调
+
+        return {'loss_seg': loss_seg}
 
 def get_cls_idx(path):
     with open(path, 'r') as f:

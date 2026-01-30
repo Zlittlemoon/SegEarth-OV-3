@@ -7,7 +7,7 @@ import random
 from torchvision import transforms
 
 class RemoteSensingDataset(Dataset):
-    def __init__(self, img_dir, mask_dir, class_file, crop_size=512, is_train=True):
+    def __init__(self, img_dir, mask_dir, class_file, crop_size=1008, is_train=True):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
         self.crop_size = crop_size
