@@ -60,12 +60,13 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         )
         
         self.adapter = RemoteSensingAdapter(topk=adapter_topk).to(device)
-        
-        # 缓存原型（不 squeeze，保持原始形状）
+
+        # 缓存原型（squeeze 掉 batch 维度，adapter 会自动处理广播）
         self.cached_prototypes = {}
         for word in self.query_words:
             v_ref, scores = self.proto_manager.get_prototypes([word], topk=adapter_topk)
-            self.cached_prototypes[word] = (v_ref, scores)  # [1, topk, 512], [1, topk]
+            # Squeeze batch dimension: [1, topk, 512] -> [topk, 512], [1, topk] -> [topk]
+            self.cached_prototypes[word] = (v_ref.squeeze(0), scores.squeeze(0))
 
     @staticmethod
     def _get_fpn(backbone_out):
@@ -200,8 +201,12 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                 image = Image.open(image_path).convert('RGB')
                 ori_shape = meta['ori_shape']
 
-                # 强制使用滑动窗口（验证大图必须这样，避免 evaluator 问题）
-                seg_logits = self.slide_inference(image, self.slide_stride, self.slide_crop)
+                # [FIX 1] 使用与 baseline 相同的条件推理逻辑
+                # 只有当 crop_size 小于图像尺寸时才使用滑动窗口
+                if self.slide_crop > 0 and (self.slide_crop < image.size[0] or self.slide_crop < image.size[1]):
+                    seg_logits = self.slide_inference(image, self.slide_stride, self.slide_crop)
+                else:
+                    seg_logits = self._inference_single_view(image)
 
                 # 如果累积后尺寸不对，resize
                 if seg_logits.shape[-2:] != ori_shape:
@@ -212,16 +217,26 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                         align_corners=False
                     ).squeeze(0)
 
-                # 确保 seg_pred 是 long 类别索引
-                seg_pred = torch.argmax(seg_logits, dim=0).long()
+                # [FIX 2] 使用与 baseline 完全相同的一词多类处理逻辑
+                if self.num_cls != self.num_queries:
+                    seg_logits = seg_logits.unsqueeze(0)  # [1, Q, H, W]
+                    cls_index = F.one_hot(self.query_idx)  # [Q, C]
+                    cls_index = cls_index.T.view(self.num_cls, len(self.query_idx), 1, 1)  # [C, Q, 1, 1]
+                    seg_logits = (seg_logits * cls_index).max(1)[0]  # [C, H, W]
+                    seg_pred = seg_logits.argmax(0, keepdim=True)  # [1, H, W]
 
-                # 打印检查（调试用，可删除）
-                print("seg_pred shape:", seg_pred.shape)
-                print("seg_pred unique:", torch.unique(seg_pred))
+                # [FIX] Baseline 在 if 块外重新计算 seg_pred（虽然看起来是 bug，但要保持一致）
+                seg_pred = torch.argmax(seg_logits, dim=0)  # [H, W]
 
-                # 设置 pred_sem_seg（确保 [1, H, W] long）
-                data_samples[i].pred_sem_seg = PixelData(data=seg_pred.unsqueeze(0))
-                data_samples[i].seg_logits = PixelData(data=seg_logits)
+                # [FIX 3] 应用概率阈值（与 baseline 一致）
+                max_vals = seg_logits.max(0)[0]  # [H, W]
+                seg_pred[max_vals < self.prob_thd] = self.bg_idx
+
+                # 设置 pred_sem_seg（需要 unsqueeze 到 [1, H, W]）
+                data_samples[i].set_data({
+                    'seg_logits': PixelData(**{'data': seg_logits}),
+                    'pred_sem_seg': PixelData(**{'data': seg_pred.unsqueeze(0)})
+                })
 
         return data_samples
             
@@ -313,6 +328,13 @@ class SegEarthOV3Segmentation(BaseSegmentor):
             gts.append(gt)
         gt = torch.stack(gts).long().to(device)  # [B, H, W]，可含 255
 
+        # [FIX] SAM3 expects 1024x1024 input due to pre-computed positional encodings
+        # Resize inputs and gt to 1024x1024 for training
+        original_size = (inputs.shape[2], inputs.shape[3])
+        if original_size != (1024, 1024):
+            inputs = F.interpolate(inputs, size=(1024, 1024), mode='bilinear', align_corners=False)
+            gt = F.interpolate(gt.unsqueeze(1).float(), size=(1024, 1024), mode='nearest').squeeze(1).long()
+
         # Step 1: backbone forward_image (冻结)
         with torch.no_grad():
             backbone_out = self.processor.model.backbone.forward_image(inputs)  # 只图像
@@ -335,9 +357,8 @@ class SegEarthOV3Segmentation(BaseSegmentor):
             fpn_feats = [f.clone() for f in fpn_backup]
 
             # adapter 增强（每个 query 独立）
+            # cached_prototypes 现在是 [topk, 512] 和 [topk]，adapter 会自动广播到 batch
             prototypes, proto_scores = self.cached_prototypes[query_word]
-            prototypes = prototypes.expand(B, -1, -1)
-            proto_scores = proto_scores.expand(B, -1)
 
             enhanced_fpn = self.adapter(fpn_feats, prototypes, proto_scores)
             self._set_fpn(backbone_out, enhanced_fpn)
@@ -386,8 +407,7 @@ class SegEarthOV3Segmentation(BaseSegmentor):
             # queries already correspond to classes one-to-one
             seg_logits = seg_logits  # [B, C, H, W] if Q == C
 
-        # 扩展到 batch
-        seg_logits = seg_logits.expand(B, -1, -1, -1)  # [B, num_cls, H, W]
+        # seg_logits is already [B, num_cls, H, W], no need to expand
 
         # CE loss
         loss_ce = criterion(seg_logits, gt)

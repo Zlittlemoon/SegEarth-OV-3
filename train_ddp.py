@@ -152,10 +152,16 @@ def run_validation(model, cfg_path, exp_dir, epoch, rank):
     # 放在 exp_dir 下，确保所有 Rank 都能访问到同一个物理路径
     val_name = f"val_epoch_{epoch+1}"
     collect_dir = os.path.abspath(os.path.join(exp_dir, f"dist_collect_epoch_{epoch+1}"))
-    
+
     if rank == 0:
         os.makedirs(collect_dir, exist_ok=True)
-    
+        # Print validation info
+        print(f"\n{'='*60}")
+        print(f"Running Validation - Epoch {epoch+1}")
+        print(f"Model: num_cls={model.num_cls}, num_queries={model.num_queries}")
+        print(f"Query-to-class mapping: {model.query_idx.tolist()}")
+        print(f"{'='*60}\n")
+
     # 必须等待 Rank 0 创建好目录，否则 Rank 1 会报 FileNotFoundError
     dist.barrier()
 
@@ -181,7 +187,13 @@ def run_validation(model, cfg_path, exp_dir, epoch, rank):
     runner.load_checkpoint = lambda: None # 禁用自动加载，直接用当前模型权重
 
     results = runner.test()
-    
+
+    if rank == 0:
+        print(f"\n{'='*60}")
+        print(f"Validation Results - Epoch {epoch+1}")
+        print(f"mIoU: {results.get('mIoU', 'N/A')}")
+        print(f"{'='*60}\n")
+
     return results
 
 # ==========================================
@@ -260,7 +272,7 @@ def train(cfg_path):
         use_transformer_decoder=True,
         use_adapter=True,
         clip_ckpt_path="weights/RemoteCLIP/RemoteCLIP-ViT-B-32.pt",
-        feature_db_path="Offline_database/Million-AID_train_image_features.pt", 
+        database_path="Offline_database/Million-AID_train_image_features.pt",
     ).to(device)
 
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
