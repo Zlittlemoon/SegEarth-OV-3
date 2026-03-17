@@ -20,6 +20,7 @@ import torch.nn as nn
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
 
+from sam3.train.utils.freeze_rs_text_prompt import maybe_apply_remote_sensing_freeze
 from sam3.model.data_misc import BatchedDatapoint
 from sam3.model.model_misc import SAM3Output
 from sam3.model.utils.misc import copy_data_to_device
@@ -217,7 +218,23 @@ class Trainer:
             is_dist_avail_and_initialized()
         ), "Torch distributed needs to be initialized before calling the trainer."
 
-        self._setup_components()  # Except Optimizer everything is setup here.
+        self._setup_components()  # Except Optimizer everything is setup here.  
+        n_total = sum(p.numel() for p in self.model.parameters())
+        n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(
+            f"[AFTER FREEZE] total={n_total}, "
+            f"trainable={n_trainable}, "
+            f"frozen={n_total - n_trainable}"
+        )
+
+        cnt = 0
+        for name, p in self.model.named_parameters():
+            if p.requires_grad:
+                print("[TRAINABLE]", name)
+                cnt += 1
+                if cnt >= 20:
+                    break
+
         self._move_to_device()
         self._construct_optimizers()
         self._setup_dataloaders()
@@ -303,6 +320,14 @@ class Trainer:
     def _setup_ddp_distributed_training(self, distributed_conf, accelerator):
         assert isinstance(self.model, torch.nn.Module)
 
+        # 单卡/单进程时不包 DDP，避免:
+        # 1) custom forward output (SAM3Output) 导致 DDP unused param tracing 失败
+        # 2) semantic-only loss 只消费部分输出时的 reduction 报错
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        if world_size == 1:
+            logging.info("World size == 1, skipping DistributedDataParallel wrapping.")
+            return
+
         self.model = nn.parallel.DistributedDataParallel(
             self.model,
             device_ids=[self.local_rank] if accelerator == "cuda" else [],
@@ -310,7 +335,8 @@ class Trainer:
             gradient_as_bucket_view=distributed_conf.gradient_as_bucket_view,
             static_graph=distributed_conf.static_graph,
         )
-        if distributed_conf.comms_dtype is not None:  # noqa
+
+        if distributed_conf.comms_dtype is not None:
             from torch.distributed.algorithms import ddp_comm_hooks
 
             amp_type = get_amp_type(distributed_conf.comms_dtype)
@@ -1073,6 +1099,7 @@ class Trainer:
         self.logger = Logger(self.logging_conf)
 
         self.model = instantiate(self.model_conf, _convert_="all")
+        maybe_apply_remote_sensing_freeze(self.model)
         print_model_summary(self.model)
 
         self.loss = None

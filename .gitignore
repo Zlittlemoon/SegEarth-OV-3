@@ -10,3 +10,4 @@ run.sh
 show_dir
 weights
 figs
+outputs/

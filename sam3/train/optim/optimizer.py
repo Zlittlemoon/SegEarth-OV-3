@@ -177,7 +177,7 @@ def validate_param_group_params(param_groups: List[Dict], model: nn.Module):
         # no param should be repeated within a group
         assert len(pg["params"]) == len(set(pg["params"]))
     parameters = [set(param_group["params"]) for param_group in param_groups]
-    model_parameters = {parameter for _, parameter in model.named_parameters()}
+    model_parameters = {parameter for _, parameter in [(n, p) for n, p in model.named_parameters() if p.requires_grad]}
     for p1, p2 in itertools.permutations(parameters, 2):
         assert p1.isdisjoint(p2), "Scheduler generated param_groups should be disjoint"
     assert set.union(*parameters) == model_parameters, (
@@ -322,11 +322,11 @@ def construct_optimizer(
             overlap and cover all the model parameters.
     """
     if param_allowlist is None:
-        param_allowlist = {name for name, _ in model.named_parameters()}
+        param_allowlist = {name for name, _ in [(n, p) for n, p in model.named_parameters() if p.requires_grad]}
 
     named_parameters = {
         name: param
-        for name, param in model.named_parameters()
+        for name, param in [(n, p) for n, p in model.named_parameters() if p.requires_grad]
         if name in param_allowlist
     }
 
@@ -335,7 +335,7 @@ def construct_optimizer(
         return Optimizer(optimizer)
 
     all_parameter_names = {
-        name for name, _ in model.named_parameters() if name in param_allowlist
+        name for name, _ in [(n, p) for n, p in model.named_parameters() if p.requires_grad] if name in param_allowlist
     }
     module_cls_to_all_param_names = get_module_cls_to_param_names(
         model, param_allowlist
@@ -388,7 +388,7 @@ class GradientClipper:
             return  # no-op
 
         nn.utils.clip_grad_norm_(
-            model.parameters(), max_norm=self.max_norm, norm_type=self.norm_type
+            [p for p in model.parameters() if p.requires_grad], max_norm=self.max_norm, norm_type=self.norm_type
         )
 
 
