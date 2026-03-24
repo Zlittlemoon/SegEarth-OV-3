@@ -11,3 +11,5 @@ show_dir
 weights
 figs
 outputs/
+dlrsd_text_prompt_exp_log/
+check/

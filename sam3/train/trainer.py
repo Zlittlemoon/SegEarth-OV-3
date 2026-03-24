@@ -679,6 +679,10 @@ class Trainer:
         loss_names = []
         for p in curr_phases:
             for key in self.loss.keys():
+                # `default` is a fallback loss selector key, not a dataset key.
+                # Logging it as a standalone meter is misleading (typically always zero).
+                if key == "default":
+                    continue
                 loss_names.append(f"Losses/{p}_{key}_loss")
 
         loss_mts = OrderedDict(
@@ -799,6 +803,10 @@ class Trainer:
 
         loss_names = []
         for batch_key in self.loss.keys():
+            # `default` is a fallback loss selector key, not a dataset key.
+            # Logging it as a standalone meter is misleading (typically always zero).
+            if batch_key == "default":
+                continue
             loss_names.append(f"Losses/{phase}_{batch_key}_loss")
 
         loss_mts = OrderedDict(

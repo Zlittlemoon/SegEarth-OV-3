@@ -636,6 +636,22 @@ def build_sam3_image_model(
 
     return model
 
+from sam3.model.rs_prompt_semantic_model import RSPromptSemanticModel
+def build_rs_prompt_semantic_model(
+    bpe_path: str,
+    device: str = "cpu",
+    eval_mode: bool = False,
+    enable_segmentation: bool = True,
+    **kwargs,   # ← 加这个
+):
+    base_model = build_sam3_image_model(
+        bpe_path=bpe_path,
+        device=device,
+        eval_mode=eval_mode,
+        enable_segmentation=enable_segmentation,
+         **kwargs,   # ← 这一行必须加！
+    )
+    return RSPromptSemanticModel(base_model)
 
 def download_ckpt_from_hf():
     SAM3_MODEL_ID = "facebook/sam3"

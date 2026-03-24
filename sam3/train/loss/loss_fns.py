@@ -1076,6 +1076,28 @@ class SemanticSegCriterion(LossWithWeights):
                 align_corners=False,
             )
 
+        # Normalize semantic target dims before focal/dice
+        if semantic_targets.ndim == 4 and semantic_targets.shape[1] == 1:
+            semantic_targets = semantic_targets[:, 0]
+
+        if semantic_targets.ndim != 3:
+            raise RuntimeError(
+                f"[SemanticSegCriterion] expected semantic_targets to be [B,H,W], "
+                f"got shape={tuple(semantic_targets.shape)}"
+            )
+
+        if outputs.ndim != 4 or outputs.shape[1] != 1:
+            raise RuntimeError(
+                f"[SemanticSegCriterion] expected outputs to be [B,1,H,W], "
+                f"got shape={tuple(outputs.shape)}"
+            )
+
+        if outputs.shape[0] != semantic_targets.shape[0]:
+            raise RuntimeError(
+                f"[SemanticSegCriterion] batch mismatch: "
+                f"pred={tuple(outputs.shape)}, target={tuple(semantic_targets.shape)}"
+            )       
+        
         if self.focal:
             loss = sigmoid_focal_loss(
                 outputs.squeeze(1).flatten(-2),

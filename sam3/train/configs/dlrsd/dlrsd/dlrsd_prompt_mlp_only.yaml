@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/smoke_test_dlrsd"
+  experiment_log_dir: "outputs/dlrsd_prompt_mlp_only"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -118,12 +118,11 @@ scratch:
   context_length: 2
   gather_pred_via_filesys: false
 
-  # 最小训练单元：语言侧有lr，其余主干即使有参数组也会被freeze hook拦住
-  lr_transformer: 1.0e-5
+  lr_transformer: 1.0e-3
   lr_vision_backbone: 0.0
-  lr_language_backbone: 1.0e-5
+  lr_language_backbone: 0.0
   lrd_vision_backbone: 1.0
-  wd: 0.05
+  wd: 0.0
 
   scheduler_timescale: 20
   scheduler_warmup: 10

@@ -83,14 +83,26 @@ def freeze_for_remote_sensing_text_prompt_semseg(
     return trainable_names, frozen_names
 
 
-def maybe_apply_remote_sensing_freeze(model: nn.Module) -> None:
-    freeze_flag = os.environ.get("SAM3_RS_FREEZE", "0").lower()
+def maybe_apply_remote_sensing_freeze(model):
+    flag = os.environ.get("SAM3_RS_FREEZE", "0")
     mode = os.environ.get("SAM3_RS_TRAIN_MODE", "minimal")
 
-    print(f"[RS FREEZE ENTRY] freeze_flag={freeze_flag}, mode={mode}")
+    print(f"[RS FREEZE] env SAM3_RS_FREEZE={flag}")
+    print(f"[RS FREEZE] env SAM3_RS_TRAIN_MODE={mode}")
 
-    if freeze_flag not in {"1", "true", "yes", "y"}:
-        print("[RS FREEZE] disabled")
-        return
+    if flag != "1":
+        print("[RS FREEZE] skip freezing because SAM3_RS_FREEZE != 1")
+        return model
 
-    freeze_for_remote_sensing_text_prompt_semseg(model, mode=mode, verbose=True)
+    trainable_names, frozen_names = freeze_for_remote_sensing_text_prompt_semseg(
+        model,
+        mode=mode,
+        verbose=True,
+    )
+
+    if len(trainable_names) == 0:
+        raise RuntimeError(
+            "[RS FREEZE] No trainable parameters left after freeze."
+        )
+
+    return model

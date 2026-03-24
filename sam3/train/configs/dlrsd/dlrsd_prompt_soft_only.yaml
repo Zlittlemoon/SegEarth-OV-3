@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/smoke_test_dlrsd"
+  experiment_log_dir: "outputs/dlrsd_prompt_soft_only_1X3090"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -111,6 +111,7 @@ scratch:
   val_norm_mean: [0.5, 0.5, 0.5]
   val_norm_std: [0.5, 0.5, 0.5]
 
+  # 关键修正：先彻底关闭多进程 dataloader，避免 NFS .nfs busy
   num_train_workers: 0
   num_val_workers: 0
 
@@ -118,20 +119,22 @@ scratch:
   context_length: 2
   gather_pred_via_filesys: false
 
-  # 最小训练单元：语言侧有lr，其余主干即使有参数组也会被freeze hook拦住
-  lr_transformer: 1.0e-5
+  # 关键修正：lr 降低，避免 soft prompt-only 中后期 spike
+  lr_transformer: 1.0e-4
   lr_vision_backbone: 0.0
-  lr_language_backbone: 1.0e-5
+  lr_language_backbone: 0.0
   lrd_vision_backbone: 1.0
-  wd: 0.05
+  wd: 0.0
 
   scheduler_timescale: 20
   scheduler_warmup: 10
   scheduler_cooldown: 10
 
   gradient_accumulation_steps: 1
-  train_batch_size: 1
-  val_batch_size: 1
+
+  # 保持 batch=16，当前是比较好的甜点区
+  train_batch_size: 16
+  val_batch_size: 16
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -151,11 +154,11 @@ trainer:
   _target_: sam3.train.trainer.Trainer
   skip_saving_ckpts: False
   empty_gpu_mem_cache_after_eval: True
-  skip_first_val: True
-  max_epochs: 1
+  skip_first_val: False
+  max_epochs: 10
   accelerator: cuda
-  seed_value: 123
-  val_epoch_freq: 9999
+  seed_value: 1230
+  val_epoch_freq: 1
   mode: train
   gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
 
@@ -230,7 +233,7 @@ trainer:
       lr:
         - scheduler:
             _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
-            base_lr: 1.0e-3
+            base_lr: 3.0e-4
             timescale: ${scratch.scheduler_timescale}
             warmup_steps: ${scratch.scheduler_warmup}
             cooldown_steps: ${scratch.scheduler_cooldown}
@@ -248,11 +251,13 @@ trainer:
     tensorboard_writer:
       _target_: sam3.train.utils.logger.make_tensorboard_logger
       log_dir: ${paths.experiment_log_dir}/tensorboard
-      flush_secs: 120
+      flush_secs: 10
       should_log: True
     wandb_writer: null
     log_dir: ${paths.experiment_log_dir}/logs
-    log_freq: 1
+    log_freq: 10
+    log_scalar_frequency: 10
+    log_visual_frequency: 100
 
 launcher:
   num_nodes: 1

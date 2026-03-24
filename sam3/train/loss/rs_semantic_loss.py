@@ -1,11 +1,67 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import torch
 import torch.nn as nn
 
 from sam3.model.model_misc import SAM3Output
+
+
+def _align_semantic_targets_to_pred_batch(
+    outputs: Dict[str, Any], targets: Dict[str, torch.Tensor]
+) -> Dict[str, torch.Tensor]:
+    """
+    Make semantic targets batch-aligned with outputs["semantic_seg"].
+
+    Expected final shape:
+      pred:    [B, 1, H, W]
+      targets: [B, H, W] or [B, 1, H, W]
+
+    Handles:
+      1) target is [1, H, W] but pred batch is B>1 -> repeat to B
+      2) target is [N, H, W] with N != B and B==1  -> union to [1, H, W]
+      3) target already aligned                     -> keep as-is
+    """
+    if "semantic_seg" not in outputs:
+        return targets
+
+    pred = outputs["semantic_seg"]
+    pred_bs = int(pred.shape[0])
+
+    if "masks" not in targets:
+        return targets
+
+    masks = targets["masks"]
+
+    # [B,1,H,W] -> [B,H,W]
+    if masks.ndim == 4 and masks.shape[1] == 1:
+        masks = masks[:, 0]
+
+    # single target replicated to multi-image batch
+    if masks.ndim == 3 and masks.shape[0] == 1 and pred_bs > 1:
+        masks = masks.repeat(pred_bs, 1, 1)
+
+    # mismatch fallback
+    if masks.ndim == 3 and masks.shape[0] != pred_bs:
+        if pred_bs == 1:
+            masks = masks.bool().any(dim=0, keepdim=True).to(masks.dtype)
+        else:
+            raise RuntimeError(
+                f"[RSSemanticOnlyLoss] semantic target batch mismatch: "
+                f"pred batch={pred_bs}, target masks shape={tuple(masks.shape)}"
+            )
+
+    targets["masks"] = masks
+
+    # SemanticSegCriterion expects num_boxes shape [B]
+    if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
+        if targets["num_boxes"].numel() != pred_bs:
+            targets["num_boxes"] = torch.ones(
+                pred_bs, dtype=torch.long, device=masks.device
+            )
+
+    return targets
 
 
 class RSSemanticOnlyLoss(nn.Module):
@@ -65,27 +121,27 @@ class RSSemanticOnlyLoss(nn.Module):
             else:
                 masks = masks.to(device)
 
-            # 空 mask -> 全零 mask
+            # empty target -> one zero semantic map
             if masks.numel() == 0:
                 masks = torch.zeros((1, H, W), dtype=torch.bool, device=device)
                 num_boxes = torch.zeros((1,), dtype=torch.long, device=device)
                 return {"masks": masks, "num_boxes": num_boxes}
 
-            # 统一成 [B, H, W]
+            # normalize to [B,H,W]
             if masks.ndim == 2:
-                masks = masks.unsqueeze(0)  # [1, H, W]
+                masks = masks.unsqueeze(0)  # [1,H,W]
             elif masks.ndim == 3:
-                if masks.shape[0] == 1:
-                    pass
-                else:
-                    masks = masks.bool().any(dim=0, keepdim=True)  # [1, H, W]
+                # already [B,H,W], keep as-is
+                pass
+            elif masks.ndim == 4 and masks.shape[1] == 1:
+                masks = masks[:, 0]  # [B,1,H,W] -> [B,H,W]
             else:
                 raise ValueError(f"Unsupported mask shape in targets dict: {tuple(masks.shape)}")
 
             num_boxes = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
 
             return {
-                "masks": masks,
+                "masks": masks.bool(),
                 "num_boxes": num_boxes,
             }
 
@@ -108,29 +164,33 @@ class RSSemanticOnlyLoss(nn.Module):
             if not torch.is_tensor(m):
                 m = torch.as_tensor(m)
 
-            # 空 mask，例如 shape == (0,)
             if m.numel() == 0:
                 m = torch.zeros((H, W), dtype=torch.bool, device=device)
                 batched_masks.append(m)
                 batched_num_boxes.append(0)
                 continue
 
-            # 支持 [H,W] / [1,H,W] / [N,H,W]
+            # support [H,W] / [1,H,W] / [N,H,W]
             if m.ndim == 2:
                 pass
             elif m.ndim == 3:
                 if m.shape[0] == 1:
                     m = m[0]
                 else:
-                    # semantic-only: 多实例 union 成一个语义 mask
+                    # union instances -> one semantic map per sample
                     m = m.bool().any(dim=0)
+            elif m.ndim == 4 and m.shape[1] == 1:
+                if m.shape[0] == 1:
+                    m = m[0, 0]
+                else:
+                    m = m[:, 0].bool().any(dim=0)
             else:
                 raise ValueError(f"Unsupported mask shape for targets[{i}]: {tuple(m.shape)}")
 
-            batched_masks.append(m.to(device))
+            batched_masks.append(m.to(device).bool())
             batched_num_boxes.append(1)
 
-        masks = torch.stack(batched_masks, dim=0)  # [B, H, W]
+        masks = torch.stack(batched_masks, dim=0)  # [B,H,W]
         num_boxes = torch.tensor(batched_num_boxes, dtype=torch.long, device=device)
 
         return {
@@ -149,6 +209,7 @@ class RSSemanticOnlyLoss(nn.Module):
         device = outputs["semantic_seg"].device
         output_hw = tuple(outputs["semantic_seg"].shape[-2:])
         targets = self._collate_targets(targets, device, output_hw)
+        targets = _align_semantic_targets_to_pred_batch(outputs, targets)
 
         loss_dict = self.loss_fn_semantic_seg(outputs, targets)
 
