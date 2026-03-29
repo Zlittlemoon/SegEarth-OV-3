@@ -1,0 +1,303 @@
+# @package _global_
+defaults:
+  - _self_
+
+paths:
+  bpe_path: sam3/assets/bpe_simple_vocab_16e6.txt.gz
+  experiment_log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt_1x4090
+  train_img_dir: data/iSAID_split/train/images
+  val_img_dir: data/iSAID_split/val/images
+  train_ann: data/sam3_semantic_fixed/isaid/train.sam3.semantic.json
+  val_ann: data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+  sam3_ckpt: weights/sam3/sam3.pt
+
+dlrsd_train:
+  num_images: 8
+  train_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+    - _target_: sam3.train.transforms.segmentation.DecodeRle
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes:
+        _target_: sam3.train.transforms.basic.get_random_resize_scales
+        size: 1008
+        min_size: 256
+        rounded: false
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: 1008
+      square: true
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+      size: 1008
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean: [0.5, 0.5, 0.5]
+      std: [0.5, 0.5, 0.5]
+
+  val_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.segmentation.DecodeRle
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes: 1008
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: 1008
+      square: true
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean: [0.5, 0.5, 0.5]
+      std: [0.5, 0.5, 0.5]
+
+  loss:
+    _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+    loss_fn_semantic_seg:
+      _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+      presence_head: false
+      presence_loss: false
+      focal: true
+      focal_alpha: 0.6
+      focal_gamma: 2.0
+      downsample: false
+      weight_dict:
+        loss_semantic_seg: 20.0
+        loss_semantic_dice: 30.0
+
+scratch:
+  enable_segmentation: true
+  use_presence_eval: true
+  matcher:
+    _target_: sam3.train.matcher.BinaryHungarianMatcherV2
+    focal: true
+    cost_class: 2.0
+    cost_bbox: 2.0
+    cost_giou: 1.0
+    alpha: 0.25
+    gamma: 2.0
+    stable: false
+  scale_by_find_batch_size: true
+  resolution: 1008
+  consistent_transform: false
+  max_ann_per_img: 200
+  train_norm_mean: [0.5, 0.5, 0.5]
+  train_norm_std: [0.5, 0.5, 0.5]
+  val_norm_mean: [0.5, 0.5, 0.5]
+  val_norm_std: [0.5, 0.5, 0.5]
+  num_train_workers: 0
+  num_val_workers: 0
+  hybrid_repeats: 1
+  context_length: 2
+  gather_pred_via_filesys: false
+  lr_transformer: 0.0001
+  lr_vision_backbone: 0.0
+  lr_language_backbone: 0.0
+  lrd_vision_backbone: 1.0
+  wd: 0.0
+  scheduler_timescale: 20
+  scheduler_warmup: 10
+  scheduler_cooldown: 10
+  gradient_accumulation_steps: 1
+  train_batch_size: 16
+  val_batch_size: 16
+  collate_fn:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: 1
+    dict_key: all
+    with_seg_masks: true
+  collate_fn_val:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: 1
+    dict_key: all
+    with_seg_masks: true
+
+trainer:
+  _target_: sam3.train.trainer.Trainer
+  skip_saving_ckpts: false
+  empty_gpu_mem_cache_after_eval: true
+  skip_first_val: false
+  max_epochs: 1
+  accelerator: cuda
+  seed_value: 123
+  val_epoch_freq: 1
+  mode: val
+  gradient_accumulation_steps: 1
+
+  distributed:
+    backend: nccl
+    find_unused_parameters: true
+    gradient_as_bucket_view: true
+
+  loss:
+    all:
+      _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+      loss_fn_semantic_seg:
+        _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+        presence_head: false
+        presence_loss: false
+        focal: true
+        focal_alpha: 0.6
+        focal_gamma: 2.0
+        downsample: false
+        weight_dict:
+          loss_semantic_seg: 20.0
+          loss_semantic_dice: 30.0
+    default:
+      _target_: sam3.train.loss.sam3_loss.DummyLoss
+
+  data:
+    train:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        img_folder: data/iSAID_split/train/images
+        ann_file: data/sam3_semantic_fixed/isaid/train.sam3.semantic.json
+        transforms:
+        - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+          transforms:
+          - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+            query_filter:
+              _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+          - _target_: sam3.train.transforms.segmentation.DecodeRle
+          - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+            sizes:
+              _target_: sam3.train.transforms.basic.get_random_resize_scales
+              size: 1008
+              min_size: 256
+              rounded: false
+            max_size:
+              _target_: sam3.train.transforms.basic.get_random_resize_max_size
+              size: 1008
+            square: true
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+            size: 1008
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+          - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+            query_filter:
+              _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+          - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+            mean: [0.5, 0.5, 0.5]
+            std: [0.5, 0.5, 0.5]
+      shuffle: true
+      batch_size: 16
+      num_workers: 0
+      pin_memory: true
+      drop_last: true
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: 1
+        dict_key: all
+        with_seg_masks: true
+
+    val:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        transforms:
+        - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+          transforms:
+          - _target_: sam3.train.transforms.segmentation.DecodeRle
+          - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+            sizes: 1008
+            max_size:
+              _target_: sam3.train.transforms.basic.get_random_resize_max_size
+              size: 1008
+            square: true
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+          - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+            mean: [0.5, 0.5, 0.5]
+            std: [0.5, 0.5, 0.5]
+        img_folder: data/iSAID_split/val/images
+        ann_file: data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+      shuffle: false
+      batch_size: 16
+      num_workers: 0
+      pin_memory: true
+      drop_last: false
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: 1
+        dict_key: all
+        with_seg_masks: true
+
+  model:
+    _target_: sam3.model_builder.build_rs_prompt_semantic_model
+    bpe_path: sam3/assets/bpe_simple_vocab_16e6.txt.gz
+    device: cpu
+    eval_mode: false
+    enable_segmentation: true
+    checkpoint_path: weights/sam3/sam3.pt
+    load_from_HF: false
+
+  meters: null
+
+  optim:
+    amp:
+      enabled: true
+      amp_dtype: bfloat16
+    optimizer:
+      _target_: torch.optim.AdamW
+    gradient_clip:
+      _target_: sam3.train.optim.optimizer.GradientClipper
+      max_norm: 0.1
+      norm_type: 2
+    param_group_modifiers: null
+    options:
+      lr:
+      - scheduler:
+          _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
+          base_lr: 0.0001
+          timescale: 20
+          warmup_steps: 10
+          cooldown_steps: 10
+      weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.0
+
+  checkpoint:
+    save_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt_1x4090/checkpoints
+    save_freq: 1
+    resume_from: outputs/dlrsd_prompt_soft_only_1X4090/checkpoints/checkpoint.pt
+
+  logging:
+    tensorboard_writer:
+      _target_: sam3.train.utils.logger.make_tensorboard_logger
+      log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt_1x4090/tensorboard
+      flush_secs: 10
+      should_log: true
+    wandb_writer: null
+    log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt_1x4090/logs
+    log_freq: 10
+    log_scalar_frequency: 10
+    log_visual_frequency: 100
+
+launcher:
+  num_nodes: 1
+  gpus_per_node: 1
+  experiment_log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt_1x4090
+  multiprocessing_context: forkserver
+
+submitit:
+  account: null
+  partition: null
+  qos: null
+  timeout_hour: 72
+  use_cluster: false
+  cpus_per_task: 8
+  port_range: [10000, 65000]

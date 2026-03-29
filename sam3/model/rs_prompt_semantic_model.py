@@ -241,34 +241,39 @@ class RSPromptSemanticModel(nn.Module):
 
         return self.sam3._get_dummy_prompt(num_prompts=num_prompts)
 
-    def _apply_prompt_tuning(self, prompt: torch.Tensor) -> torch.Tensor:
-        """
-        prompt: [L, B, C]
-        """
-        if self.prompt_tuning_mode == "soft":
-            if prompt.shape[-1] != self.prompt_dim:
-                raise RuntimeError(
-                    f"Prompt dim mismatch: prompt.shape={tuple(prompt.shape)}, "
-                    f"expected last dim={self.prompt_dim}"
-                )
-            if prompt.shape[0] != self.soft_prompt.shape[0]:
-                raise RuntimeError(
-                    f"Soft prompt length mismatch: prompt.shape={tuple(prompt.shape)}, "
-                    f"soft_prompt.shape={tuple(self.soft_prompt.shape)}. "
-                    f"Set SAM3_RS_SOFT_PROMPT_LEN to match actual prompt length."
-                )
-            # soft_prompt: [L,1,C], prompt: [L,B,C] -> broadcast on B
-            return prompt + self.soft_prompt
+    def _apply_prompt_tuning(self, prompt):
+        if self.soft_prompt is None:
+            return prompt
 
-        if self.prompt_tuning_mode == "mlp":
-            if prompt.shape[-1] != self.prompt_dim:
-                raise RuntimeError(
-                    f"Prompt dim mismatch: prompt.shape={tuple(prompt.shape)}, "
-                    f"expected last dim={self.prompt_dim}"
-                )
-            return prompt + self.prompt_mlp(prompt)
+        if prompt.shape[-1] != self.prompt_dim:
+            raise RuntimeError(
+                f"Soft prompt dim mismatch: prompt.shape={tuple(prompt.shape)}, "
+                f"expected last dim={self.prompt_dim}"
+            )
 
-        return prompt
+        prompt_len = prompt.shape[0]
+        batch_size = prompt.shape[1]
+        soft_len = self.soft_prompt.shape[0]
+
+        # 允许运行时 prompt 比 checkpoint 里的 soft_prompt 更短
+        if soft_len < prompt_len:
+            raise RuntimeError(
+                f"Soft prompt length mismatch: prompt.shape={tuple(prompt.shape)}, "
+                f"soft_prompt.shape={tuple(self.soft_prompt.shape)}. "
+                f"Checkpoint soft prompt is shorter than actual prompt."
+            )
+
+        # self.soft_prompt: [L, 1, C]
+        soft_prompt = self.soft_prompt[:prompt_len]  # [prompt_len, 1, C]
+
+        # 关键修复：扩到当前 batch 维，变成 [L, B, C]
+        if soft_prompt.shape[1] != batch_size:
+            soft_prompt = soft_prompt.expand(-1, batch_size, -1)
+
+        if self.prompt_only:
+            return soft_prompt
+
+        return prompt + soft_prompt
 
     def _print_trainable_summary_once(self):
         if hasattr(self, "_printed_trainable_summary") and self._printed_trainable_summary:

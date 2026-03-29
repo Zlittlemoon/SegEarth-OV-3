@@ -147,6 +147,9 @@ def main(args) -> None:
     print("###################### Train App Config ####################")
     print(OmegaConf.to_yaml(cfg))
     print("############################################################")
+    print("VAL IMG DIR =", cfg.paths.val_img_dir)
+    print("VAL DATASET IMG FOLDER =", cfg.trainer.data.val.dataset.img_folder)
+    print(OmegaConf.to_yaml(cfg.trainer.data.val.dataset))
 
     add_pythonpath_to_sys_path()
     makedir(cfg.launcher.experiment_log_dir)

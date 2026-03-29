@@ -1,0 +1,1523 @@
+###################### Train App Config ####################
+paths:
+  bpe_path: sam3/assets/bpe_simple_vocab_16e6.txt.gz
+  experiment_log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt2_4090
+  train_img_dir: data/iSAID_split/train/images
+  val_img_dir: data/iSAID_split/val/images
+  train_ann: data/sam3_semantic_fixed/isaid/train.sam3.semantic.json
+  val_ann: data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+  sam3_ckpt: weights/sam3/sam3.pt
+dlrsd_train:
+  num_images: 8
+  train_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+    - _target_: sam3.train.transforms.segmentation.DecodeRle
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes:
+        _target_: sam3.train.transforms.basic.get_random_resize_scales
+        size: 1008
+        min_size: 256
+        rounded: false
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: 1008
+      square: true
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+      size: 1008
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean:
+      - 0.5
+      - 0.5
+      - 0.5
+      std:
+      - 0.5
+      - 0.5
+      - 0.5
+  val_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.segmentation.DecodeRle
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes: 1008
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: 1008
+      square: true
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean:
+      - 0.5
+      - 0.5
+      - 0.5
+      std:
+      - 0.5
+      - 0.5
+      - 0.5
+  loss:
+    _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+    loss_fn_semantic_seg:
+      _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+      presence_head: false
+      presence_loss: false
+      focal: true
+      focal_alpha: 0.6
+      focal_gamma: 2.0
+      downsample: false
+      weight_dict:
+        loss_semantic_seg: 20.0
+        loss_semantic_dice: 30.0
+scratch:
+  enable_segmentation: true
+  use_presence_eval: true
+  matcher:
+    _target_: sam3.train.matcher.BinaryHungarianMatcherV2
+    focal: true
+    cost_class: 2.0
+    cost_bbox: 2.0
+    cost_giou: 1.0
+    alpha: 0.25
+    gamma: 2.0
+    stable: false
+  scale_by_find_batch_size: true
+  resolution: 1008
+  consistent_transform: false
+  max_ann_per_img: 200
+  train_norm_mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  train_norm_std:
+  - 0.5
+  - 0.5
+  - 0.5
+  val_norm_mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  val_norm_std:
+  - 0.5
+  - 0.5
+  - 0.5
+  num_train_workers: 0
+  num_val_workers: 0
+  hybrid_repeats: 1
+  context_length: 2
+  gather_pred_via_filesys: false
+  lr_transformer: 0.0001
+  lr_vision_backbone: 0.0
+  lr_language_backbone: 0.0
+  lrd_vision_backbone: 1.0
+  wd: 0.0
+  scheduler_timescale: 20
+  scheduler_warmup: 10
+  scheduler_cooldown: 10
+  gradient_accumulation_steps: 1
+  train_batch_size: 16
+  val_batch_size: 16
+  collate_fn:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: 1
+    dict_key: all
+    with_seg_masks: true
+  collate_fn_val:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: 1
+    dict_key: all
+    with_seg_masks: true
+trainer:
+  _target_: sam3.train.trainer.Trainer
+  skip_saving_ckpts: false
+  empty_gpu_mem_cache_after_eval: true
+  skip_first_val: false
+  max_epochs: 1
+  accelerator: cuda
+  seed_value: 123
+  val_epoch_freq: 1
+  mode: val
+  gradient_accumulation_steps: 1
+  distributed:
+    backend: nccl
+    find_unused_parameters: true
+    gradient_as_bucket_view: true
+  loss:
+    all:
+      _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+      loss_fn_semantic_seg:
+        _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+        presence_head: false
+        presence_loss: false
+        focal: true
+        focal_alpha: 0.6
+        focal_gamma: 2.0
+        downsample: false
+        weight_dict:
+          loss_semantic_seg: 20.0
+          loss_semantic_dice: 30.0
+    default:
+      _target_: sam3.train.loss.sam3_loss.DummyLoss
+  data:
+    train:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        img_folder: data/iSAID_split/train/images
+        ann_file: data/sam3_semantic_fixed/isaid/train.sam3.semantic.json
+        transforms:
+        - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+          transforms:
+          - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+            query_filter:
+              _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+          - _target_: sam3.train.transforms.segmentation.DecodeRle
+          - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+            sizes:
+              _target_: sam3.train.transforms.basic.get_random_resize_scales
+              size: 1008
+              min_size: 256
+              rounded: false
+            max_size:
+              _target_: sam3.train.transforms.basic.get_random_resize_max_size
+              size: 1008
+            square: true
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+            size: 1008
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+          - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+            query_filter:
+              _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+          - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+            mean:
+            - 0.5
+            - 0.5
+            - 0.5
+            std:
+            - 0.5
+            - 0.5
+            - 0.5
+      shuffle: true
+      batch_size: 16
+      num_workers: 0
+      pin_memory: true
+      drop_last: true
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: 1
+        dict_key: all
+        with_seg_masks: true
+    val:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        transforms:
+        - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+          transforms:
+          - _target_: sam3.train.transforms.segmentation.DecodeRle
+          - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+            sizes: 1008
+            max_size:
+              _target_: sam3.train.transforms.basic.get_random_resize_max_size
+              size: 1008
+            square: true
+            consistent_transform: false
+          - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+          - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+            mean:
+            - 0.5
+            - 0.5
+            - 0.5
+            std:
+            - 0.5
+            - 0.5
+            - 0.5
+        img_folder: data/iSAID_split/val/images
+        ann_file: data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+      shuffle: false
+      batch_size: 16
+      num_workers: 0
+      pin_memory: true
+      drop_last: false
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: 1
+        dict_key: all
+        with_seg_masks: true
+  model:
+    _target_: sam3.model_builder.build_rs_prompt_semantic_model
+    bpe_path: sam3/assets/bpe_simple_vocab_16e6.txt.gz
+    device: cpu
+    eval_mode: false
+    enable_segmentation: true
+    checkpoint_path: weights/sam3/sam3.pt
+    load_from_HF: false
+  meters: null
+  optim:
+    amp:
+      enabled: true
+      amp_dtype: bfloat16
+    optimizer:
+      _target_: torch.optim.AdamW
+    gradient_clip:
+      _target_: sam3.train.optim.optimizer.GradientClipper
+      max_norm: 0.1
+      norm_type: 2
+    param_group_modifiers: null
+    options:
+      lr:
+      - scheduler:
+          _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
+          base_lr: 0.0001
+          timescale: 20
+          warmup_steps: 10
+          cooldown_steps: 10
+      weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.0
+  checkpoint:
+    save_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt2/checkpoints
+    save_freq: 1
+    resume_from: outputs/dlrsd_prompt_soft_only_1X4090/checkpoints/checkpoint_2.pt
+  logging:
+    tensorboard_writer:
+      _target_: sam3.train.utils.logger.make_tensorboard_logger
+      log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt2/tensorboard
+      flush_secs: 10
+      should_log: true
+    wandb_writer: null
+    log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt2/logs
+    log_freq: 10
+    log_scalar_frequency: 10
+    log_visual_frequency: 100
+launcher:
+  num_nodes: 1
+  gpus_per_node: 1
+  experiment_log_dir: outputs/isaid_eval_from_dlrsd_soft_ckpt2
+  multiprocessing_context: forkserver
+submitit:
+  account: null
+  partition: null
+  qos: null
+  timeout_hour: 72
+  use_cluster: false
+  cpus_per_task: 8
+  port_range:
+  - 10000
+  - 65000
+
+############################################################
+VAL IMG DIR = data/iSAID_split/val/images
+VAL DATASET IMG FOLDER = data/iSAID_split/val/images
+_target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+transforms:
+- _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+  transforms:
+  - _target_: sam3.train.transforms.segmentation.DecodeRle
+  - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+    sizes: 1008
+    max_size:
+      _target_: sam3.train.transforms.basic.get_random_resize_max_size
+      size: 1008
+    square: true
+    consistent_transform: false
+  - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+  - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+    mean:
+    - 0.5
+    - 0.5
+    - 0.5
+    std:
+    - 0.5
+    - 0.5
+    - 0.5
+img_folder: data/iSAID_split/val/images
+ann_file: data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+
+Experiment Log Dir:
+outputs/isaid_eval_from_dlrsd_soft_ckpt2
+INFO 2026-03-25 12:58:37,487 train_utils.py: 105: MACHINE SEED: 123
+INFO 2026-03-25 12:58:37,491 train_utils.py: 151: Logging ENV_VARIABLES
+INFO 2026-03-25 12:58:37,507 train_utils.py: 152: ADDR2LINE=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-addr2line
+AR=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ar
+AS=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-as
+BASH_ENV=/opt/ohpc/admin/lmod/lmod/init/bash
+BASH_FUNC_ml%%=() {  eval "$($LMOD_DIR/ml_cmd "$@")"
+}
+BASH_FUNC_module%%=() {  if [ -z "${LMOD_SH_DBG_ON+x}" ]; then
+ case "$-" in 
+ *v*x*)
+ __lmod_sh_dbg='vx'
+ ;;
+ *v*)
+ __lmod_sh_dbg='v'
+ ;;
+ *x*)
+ __lmod_sh_dbg='x'
+ ;;
+ esac;
+ fi;
+ if [ -n "${__lmod_sh_dbg:-}" ]; then
+ set +$__lmod_sh_dbg;
+ echo "Shell debugging temporarily silenced: export LMOD_SH_DBG_ON=1 for Lmod's output" 1>&2;
+ fi;
+ eval "$($LMOD_CMD shell "$@")" && eval "$(${LMOD_SETTARG_CMD:-:} -s sh)";
+ __lmod_my_status=$?;
+ if [ -n "${__lmod_sh_dbg:-}" ]; then
+ echo "Shell debugging restarted" 1>&2;
+ set -$__lmod_sh_dbg;
+ fi;
+ unset __lmod_sh_dbg;
+ return $__lmod_my_status
+}
+BASH_FUNC_which%%=() {  ( alias;
+ eval ${which_declare} ) | /usr/bin/which --tty-only --read-alias --read-functions --show-tilde --show-dot $@
+}
+BROWSER=/home/108/u108008/.vscode-server/cli/servers/Stable-ce099c1ed25d9eb3076c11e4a280f3eb52b4fbeb/server/bin/helpers/browser.sh
+BUILD=x86_64-conda-linux-gnu
+BUNDLED_DEBUGPY_PATH=/home/108/u108008/.vscode-server/extensions/ms-python.debugpy-2025.19.2025121701/bundled/libs/debugpy
+CC=x86_64-conda-linux-gnu-cc
+CC_FOR_BUILD=x86_64-conda-linux-gnu-cc
+CFLAGS=-march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-strong -fno-plt -O2 -ffunction-sections -pipe -isystem /home/108/u108008/miniconda3/envs/segov3/include
+CMAKE_ARGS=-DCMAKE_AR=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ar -DCMAKE_CXX_COMPILER_AR=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-gcc-ar -DCMAKE_C_COMPILER_AR=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-gcc-ar -DCMAKE_RANLIB=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ranlib -DCMAKE_CXX_COMPILER_RANLIB=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-gcc-ranlib -DCMAKE_C_COMPILER_RANLIB=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-gcc-ranlib -DCMAKE_LINKER=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ld -DCMAKE_STRIP=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-strip -DCMAKE_BUILD_TYPE=Release
+CMAKE_PREFIX_PATH=/home/108/u108008/miniconda3/envs/segov3:/home/108/u108008/miniconda3/envs/segov3/x86_64-conda-linux-gnu/sysroot/usr
+COLORTERM=truecolor
+CONDA_BACKUP__CONDA_PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata_x86_64_conda_linux_gnu
+CONDA_BUILD_CROSS_COMPILATION=
+CONDA_BUILD_SYSROOT=/home/108/u108008/miniconda3/envs/segov3/x86_64-conda-linux-gnu/sysroot
+CONDA_DEFAULT_ENV=segov3
+CONDA_EXE=/home/108/u108008/miniconda3/bin/conda
+CONDA_PREFIX=/home/108/u108008/miniconda3/envs/segov3
+CONDA_PROMPT_MODIFIER=(segov3) 
+CONDA_PYTHON_EXE=/home/108/u108008/miniconda3/bin/python
+CONDA_SHLVL=1
+CONDA_TOOLCHAIN_BUILD=x86_64-conda-linux-gnu
+CONDA_TOOLCHAIN_HOST=x86_64-conda-linux-gnu
+CPP=x86_64-conda-linux-gnu-cpp
+CPPFLAGS=-DNDEBUG -D_FORTIFY_SOURCE=2 -O2 -isystem /home/108/u108008/miniconda3/envs/segov3/include
+CPP_FOR_BUILD=x86_64-conda-linux-gnu-cpp
+CUDAARCHS=75-real;80-real;86-real;89-real;90-real;100-real;103-real;110-real;120-real;121
+CUDA_HOME=/home/108/u108008/miniconda3
+CUDA_MODULE_LOADING=LAZY
+CXX=x86_64-conda-linux-gnu-c++
+CXXFILT=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-c++filt
+CXXFLAGS=-fvisibility-inlines-hidden -fmessage-length=0 -march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-strong -fno-plt -O2 -ffunction-sections -pipe -isystem /home/108/u108008/miniconda3/envs/segov3/include
+CXX_FOR_BUILD=x86_64-conda-linux-gnu-c++
+DEBUGINFOD_IMA_CERT_PATH=/etc/keys/ima:
+DEBUGINFOD_URLS=https://debuginfod.rockylinux.org/ 
+DEBUG_CFLAGS=-march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-all -fno-plt -Og -g -Wall -Wextra -fvar-tracking-assignments -ffunction-sections -pipe -isystem /home/108/u108008/miniconda3/envs/segov3/include
+DEBUG_CPPFLAGS=-D_DEBUG -D_FORTIFY_SOURCE=2 -Og -isystem /home/108/u108008/miniconda3/envs/segov3/include
+DEBUG_CXXFLAGS=-fvisibility-inlines-hidden -fmessage-length=0 -march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-all -fno-plt -Og -g -Wall -Wextra -fvar-tracking-assignments -ffunction-sections -pipe -isystem /home/108/u108008/miniconda3/envs/segov3/include
+ELFEDIT=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-elfedit
+FPATH=/opt/ohpc/admin/lmod/lmod/init/ksh_funcs
+GCC=x86_64-conda-linux-gnu-gcc
+GCC_AR=x86_64-conda-linux-gnu-gcc-ar
+GCC_NM=x86_64-conda-linux-gnu-gcc-nm
+GCC_RANLIB=x86_64-conda-linux-gnu-gcc-ranlib
+GIT_ASKPASS=/home/108/u108008/.vscode-server/cli/servers/Stable-994fd12f8d3a5aa16f17d42c041e5809167e845a/server/extensions/git/dist/askpass.sh
+GPROF=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-gprof
+GXX=x86_64-conda-linux-gnu-g++
+HISTCONTROL=ignoredups
+HISTSIZE=1000
+HOME=/home/108/u108008
+HOST=x86_64-conda-linux-gnu
+HOSTNAME=gpu-node-09
+HWLOC_BIN=/opt/ohpc/pub/libs/hwloc/bin
+HWLOC_DIR=/opt/ohpc/pub/libs/hwloc
+HWLOC_INC=/opt/ohpc/pub/libs/hwloc/include
+HWLOC_LIB=/opt/ohpc/pub/libs/hwloc/lib
+HYDRA_FULL_ERROR=1
+INCLUDE=/opt/ohpc/pub/compiler/gcc/13.2.0/include
+LANG=C.UTF-8
+LD=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ld
+LDFLAGS=-Wl,-O2 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,--disable-new-dtags -Wl,--gc-sections -Wl,--allow-shlib-undefined -Wl,-rpath,/home/108/u108008/miniconda3/envs/segov3/lib -Wl,-rpath-link,/home/108/u108008/miniconda3/envs/segov3/lib -L/home/108/u108008/miniconda3/envs/segov3/lib
+LDFLAGS_LD=-O2 --sort-common --as-needed -z relro -z now --disable-new-dtags --gc-sections --allow-shlib-undefined -rpath /home/108/u108008/miniconda3/envs/segov3/lib -rpath-link /home/108/u108008/miniconda3/envs/segov3/lib -L/home/108/u108008/miniconda3/envs/segov3/lib
+LD_LIBRARY_PATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/lib:/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/lib:/opt/ohpc/pub/libs/hwloc/lib:/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/lib:/opt/ohpc/pub/compiler/gcc/13.2.0/lib64
+LESSOPEN=||/usr/bin/lesspipe.sh %s
+LIBFABRIC_BIN=/opt/ohpc/pub/mpi/libfabric/1.18.0/bin
+LIBFABRIC_DIR=/opt/ohpc/pub/mpi/libfabric/1.18.0
+LIBFABRIC_INC=/opt/ohpc/pub/mpi/libfabric/1.18.0/include
+LIBFABRIC_LIB=/opt/ohpc/pub/mpi/libfabric/1.18.0/lib
+LMOD_CMD=/opt/ohpc/admin/lmod/lmod/libexec/lmod
+LMOD_COLORIZE=no
+LMOD_DIR=/opt/ohpc/admin/lmod/lmod/libexec
+LMOD_FAMILY_COMPILER=gnu13
+LMOD_FAMILY_COMPILER_VERSION=13.2.0
+LMOD_FAMILY_MPI=openmpi5
+LMOD_FAMILY_MPI_VERSION=5.0.5
+LMOD_FULL_SETTARG_SUPPORT=no
+LMOD_PKG=/opt/ohpc/admin/lmod/lmod
+LMOD_PREPEND_BLOCK=normal
+LMOD_ROOT=/opt/ohpc/admin/lmod
+LMOD_SETTARG_CMD=:
+LMOD_SETTARG_FULL_SUPPORT=no
+LMOD_VERSION=8.7.59
+LOADEDMODULES=autotools:prun/2.2:gnu13/13.2.0:hwloc/2.12.0:ucx/1.18.0:libfabric/1.18.0:openmpi5/5.0.5:ohpc
+LOCAL_RANK=0
+LOGNAME=u108008
+MAIL=/var/spool/mail/u108008
+MANPATH=/home/108/u108008/.nvm/versions/node/v24.13.0/share/man:/opt/ohpc/pub/mpi/libfabric/1.18.0/share/man:/opt/ohpc/pub/libs/hwloc/man:/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/share/man:/opt/ohpc/pub/compiler/gcc/13.2.0/share/man:/opt/ohpc/pub/utils/autotools/share/man:/usr/local/share/man:/usr/share/man/overrides:/usr/share/man/en:/usr/share/man:/opt/ohpc/admin/lmod/lmod/share/man:/home/108/u108008/.nvm/versions/node/v24.13.0/share/man::
+MASTER_ADDR=localhost
+MASTER_PORT=60901
+MESON_ARGS=-Dbuildtype=release
+MODULEPATH=/opt/ohpc/pub/moduledeps/gnu13-openmpi5:/opt/ohpc/pub/moduledeps/gnu13:/opt/ohpc/pub/modulefiles
+MODULESHOME=/opt/ohpc/admin/lmod/lmod
+MPI_DIR=/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5
+NM=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-nm
+NVCC_PREPEND_FLAGS= -ccbin=/home/108/u108008/miniconda3/envs/sam3/bin/x86_64-conda-linux-gnu-c++
+NVM_BIN=/home/108/u108008/.nvm/versions/node/v24.13.0/bin
+NVM_CD_FLAGS=
+NVM_DIR=/home/108/u108008/.nvm
+NVM_INC=/home/108/u108008/.nvm/versions/node/v24.13.0/include/node
+OBJCOPY=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-objcopy
+OBJDUMP=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-objdump
+OMPI_MCA_mca_base_component_show_load_errors=0
+OPENCV_HEADLESS=1
+PATH=/home/108/u108008/miniconda3/envs/segov3/bin:/opt/ohpc/pub/mpi/libfabric/1.18.0/bin:/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/bin:/opt/ohpc/pub/libs/hwloc/bin:/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/bin:/opt/ohpc/pub/compiler/gcc/13.2.0/bin:/opt/ohpc/pub/utils/prun/2.2:/opt/ohpc/pub/utils/autotools/bin:/opt/ohpc/pub/bin:/home/108/u108008/.vscode-server/data/User/globalStorage/github.copilot-chat/debugCommand:/home/108/u108008/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli:/home/108/u108008/.vscode-server/cli/servers/Stable-ce099c1ed25d9eb3076c11e4a280f3eb52b4fbeb/server/bin/remote-cli:/home/108/u108008/.nvm/versions/node/v24.13.0/bin:/home/108/u108008/miniconda3/condabin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/home/108/u108008/.vscode-server/extensions/ms-python.debugpy-2025.19.2025121701/bundled/scripts/noConfigScripts
+PKG_CONFIG_PATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/lib/pkgconfig:/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/lib/pkgconfig:/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/lib/pkgconfig
+PWD=/home/108/u108008/code/SegEarth-OV-3
+PYDEVD_DISABLE_FILE_VALIDATION=1
+PYTHONPATH=/home/108/u108008/code/SegEarth-OV-3:/home/108/u108008/code/SegEarth-OV-3:/home/108/u108008/code/SegEarth-OV-3:
+PYTHONSTARTUP=/home/108/u108008/.vscode-server/data/User/workspaceStorage/8c56340bc674d51421f1b7afe831bc65-1/ms-python.python/pythonrc.py
+PYTHON_BASIC_REPL=1
+RANK=0
+RANLIB=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-ranlib
+READELF=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-readelf
+SAM3_RS_PROMPT_DIM=256
+SAM3_RS_PROMPT_ONLY=1
+SAM3_RS_PROMPT_TUNING=soft
+SAM3_RS_SOFT_PROMPT_LEN=34
+SHELL=/bin/bash
+SHLVL=3
+SIZE=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-size
+SSH_CLIENT=10.20.20.10 38736 50581
+SSH_CONNECTION=10.20.20.10 38736 10.20.88.9 50581
+STRINGS=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-strings
+STRIP=/home/108/u108008/miniconda3/envs/segov3/bin/x86_64-conda-linux-gnu-strip
+TEMP=/home/108/u108008/.cursor-tmp
+TERM=xterm-256color
+TERM_PROGRAM=vscode
+TERM_PROGRAM_VERSION=1.111.0
+TMP=/home/108/u108008/.cursor-tmp
+TMPDIR=/home/108/u108008/.cursor-tmp
+TOKENIZERS_PARALLELISM=false
+TORCH_CUDA_ARCH_LIST=7.5;8.0;8.6;8.9;9.0;10.0;10.3;11.0;12.0;12.1+PTX
+TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+UCX_BIN=/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/bin
+UCX_DIR=/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0
+UCX_INC=/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/include
+UCX_LIB=/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/lib
+UCX_WARN_UNUSED_ENV_VARS=N
+USER=u108008
+VSCODE_DEBUGPY_ADAPTER_ENDPOINTS=/home/108/u108008/.vscode-server/extensions/ms-python.debugpy-2025.19.2025121701/.noConfigDebugAdapterEndpoints/endpoint-b2ba979b3724611a.txt
+VSCODE_GIT_ASKPASS_EXTRA_ARGS=
+VSCODE_GIT_ASKPASS_MAIN=/home/108/u108008/.vscode-server/cli/servers/Stable-994fd12f8d3a5aa16f17d42c041e5809167e845a/server/extensions/git/dist/askpass-main.js
+VSCODE_GIT_ASKPASS_NODE=/home/108/u108008/.vscode-server/cli/servers/Stable-994fd12f8d3a5aa16f17d42c041e5809167e845a/server/node
+VSCODE_GIT_IPC_HANDLE=/tmp/vscode-git-fed6423848.sock
+VSCODE_IPC_HOOK_CLI=/home/108/u108008/.cursor-tmp/vscode-ipc-dbf28787-0993-4449-b6ce-653c1240fec2.sock
+VSCODE_PYTHON_AUTOACTIVATE_GUARD=1
+WORLD_SIZE=1
+XDG_DATA_DIRS=/home/108/u108008/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share
+XDG_RUNTIME_DIR=/home/108/u108008/.cursor-tmp
+_=/home/108/u108008/miniconda3/envs/segov3/bin/python
+_CE_CONDA=
+_CE_M=
+_CONDA_EXE=/home/108/u108008/miniconda3/bin/conda
+_CONDA_ROOT=/home/108/u108008/miniconda3
+_LMFILES_=/opt/ohpc/pub/modulefiles/autotools:/opt/ohpc/pub/modulefiles/prun/2.2:/opt/ohpc/pub/modulefiles/gnu13/13.2.0.lua:/opt/ohpc/pub/modulefiles/hwloc/2.12.0:/opt/ohpc/pub/modulefiles/ucx/1.18.0:/opt/ohpc/pub/modulefiles/libfabric/1.18.0:/opt/ohpc/pub/moduledeps/gnu13/openmpi5/5.0.5:/opt/ohpc/pub/modulefiles/ohpc
+_ModuleTable001_=X01vZHVsZVRhYmxlXyA9IHsKTVR2ZXJzaW9uID0gMywKY19yZWJ1aWxkVGltZSA9IGZhbHNlLApjX3Nob3J0VGltZSA9IGZhbHNlLApkZXB0aFQgPSB7fSwKZmFtaWx5ID0gewpNUEkgPSAib3Blbm1waTUiLApjb21waWxlciA9ICJnbnUxMyIsCn0sCm1UID0gewphdXRvdG9vbHMgPSB7CmZuID0gIi9vcHQvb2hwYy9wdWIvbW9kdWxlZmlsZXMvYXV0b3Rvb2xzIiwKZnVsbE5hbWUgPSAiYXV0b3Rvb2xzIiwKbG9hZE9yZGVyID0gMSwKcHJvcFQgPSB7fSwKc3RhY2tEZXB0aCA9IDEsCnN0YXR1cyA9ICJhY3RpdmUiLAp1c2VyTmFtZSA9ICJhdXRvdG9vbHMiLAp3ViA9ICJNLip6ZmluYWwiLAp9LApnbnUxMyA9IHsKYWN0aW9uQSA9IHsKInByZXBlbmRfcGF0aChcIk1PRFVMRVBB
+_ModuleTable002_=VEhcIixcIi9vcHQvb2hwYy9wdWIvbW9kdWxlZGVwcy9nbnUxM1wiKSIsCn0sCmZuID0gIi9vcHQvb2hwYy9wdWIvbW9kdWxlZmlsZXMvZ251MTMvMTMuMi4wLmx1YSIsCmZ1bGxOYW1lID0gImdudTEzLzEzLjIuMCIsCmxvYWRPcmRlciA9IDMsCnByb3BUID0ge30sCnN0YWNrRGVwdGggPSAxLApzdGF0dXMgPSAiYWN0aXZlIiwKdXNlck5hbWUgPSAiZ251MTMiLAp3ViA9ICIwMDAwMDAwMTMuMDAwMDAwMDAyLip6ZmluYWwiLAp9LApod2xvYyA9IHsKZm4gPSAiL29wdC9vaHBjL3B1Yi9tb2R1bGVmaWxlcy9od2xvYy8yLjEyLjAiLApmdWxsTmFtZSA9ICJod2xvYy8yLjEyLjAiLApsb2FkT3JkZXIgPSA0LApwcm9wVCA9IHt9LApyZWZfY291bnQgPSAxLApzdGFja0RlcHRoID0g
+_ModuleTable003_=MiwKc3RhdHVzID0gImFjdGl2ZSIsCnVzZXJOYW1lID0gImh3bG9jIiwKd1YgPSAiMDAwMDAwMDAyLjAwMDAwMDAxMi4qemZpbmFsIiwKfSwKbGliZmFicmljID0gewpmbiA9ICIvb3B0L29ocGMvcHViL21vZHVsZWZpbGVzL2xpYmZhYnJpYy8xLjE4LjAiLApmdWxsTmFtZSA9ICJsaWJmYWJyaWMvMS4xOC4wIiwKbG9hZE9yZGVyID0gNiwKcHJvcFQgPSB7fSwKcmVmX2NvdW50ID0gMSwKc3RhY2tEZXB0aCA9IDIsCnN0YXR1cyA9ICJhY3RpdmUiLAp1c2VyTmFtZSA9ICJsaWJmYWJyaWMiLAp3ViA9ICIwMDAwMDAwMDEuMDAwMDAwMDE4Lip6ZmluYWwiLAp9LApvaHBjID0gewpmbiA9ICIvb3B0L29ocGMvcHViL21vZHVsZWZpbGVzL29ocGMiLApmdWxsTmFtZSA9ICJvaHBjIiwK
+_ModuleTable004_=bG9hZE9yZGVyID0gOCwKcHJvcFQgPSB7fSwKc3RhY2tEZXB0aCA9IDAsCnN0YXR1cyA9ICJhY3RpdmUiLAp1c2VyTmFtZSA9ICJvaHBjIiwKd1YgPSAiTS4qemZpbmFsIiwKfSwKb3Blbm1waTUgPSB7CmFjdGlvbkEgPSB7CiJwcmVwZW5kX3BhdGgoXCJNT0RVTEVQQVRIXCIsXCIvb3B0L29ocGMvcHViL21vZHVsZWRlcHMvZ251MTMtb3Blbm1waTVcIikiLAp9LApmbiA9ICIvb3B0L29ocGMvcHViL21vZHVsZWRlcHMvZ251MTMvb3Blbm1waTUvNS4wLjUiLApmdWxsTmFtZSA9ICJvcGVubXBpNS81LjAuNSIsCmxvYWRPcmRlciA9IDcsCnByb3BUID0ge30sCnN0YWNrRGVwdGggPSAxLApzdGF0dXMgPSAiYWN0aXZlIiwKdXNlck5hbWUgPSAib3Blbm1waTUiLAp3ViA9ICIwMDAw
+_ModuleTable005_=MDAwMDUuMDAwMDAwMDAwLjAwMDAwMDAwNS4qemZpbmFsIiwKfSwKcHJ1biA9IHsKZm4gPSAiL29wdC9vaHBjL3B1Yi9tb2R1bGVmaWxlcy9wcnVuLzIuMiIsCmZ1bGxOYW1lID0gInBydW4vMi4yIiwKbG9hZE9yZGVyID0gMiwKcHJvcFQgPSB7fSwKc3RhY2tEZXB0aCA9IDEsCnN0YXR1cyA9ICJhY3RpdmUiLAp1c2VyTmFtZSA9ICJwcnVuIiwKd1YgPSAiMDAwMDAwMDAyLjAwMDAwMDAwMi4qemZpbmFsIiwKfSwKdWN4ID0gewpmbiA9ICIvb3B0L29ocGMvcHViL21vZHVsZWZpbGVzL3VjeC8xLjE4LjAiLApmdWxsTmFtZSA9ICJ1Y3gvMS4xOC4wIiwKbG9hZE9yZGVyID0gNSwKcHJvcFQgPSB7fSwKcmVmX2NvdW50ID0gMSwKc3RhY2tEZXB0aCA9IDIsCnN0YXR1cyA9ICJhY3Rp
+_ModuleTable006_=dmUiLAp1c2VyTmFtZSA9ICJ1Y3giLAp3ViA9ICIwMDAwMDAwMDEuMDAwMDAwMDE4Lip6ZmluYWwiLAp9LAp9LAptcGF0aEEgPSB7CiIvb3B0L29ocGMvcHViL21vZHVsZWRlcHMvZ251MTMtb3Blbm1waTUiLCAiL29wdC9vaHBjL3B1Yi9tb2R1bGVkZXBzL2dudTEzIiwgIi9vcHQvb2hwYy9wdWIvbW9kdWxlZmlsZXMiLAp9LApzeXN0ZW1CYXNlTVBBVEggPSAiL29wdC9vaHBjL3B1Yi9tb2R1bGVmaWxlcyIsCn0K
+_ModuleTable_Sz_=6
+__LMOD_REF_COUNT_INCLUDE=/opt/ohpc/pub/compiler/gcc/13.2.0/include:1
+__LMOD_REF_COUNT_LD_LIBRARY_PATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/lib:1;/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/lib:1;/opt/ohpc/pub/libs/hwloc/lib:1;/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/lib:1;/opt/ohpc/pub/compiler/gcc/13.2.0/lib64:1
+__LMOD_REF_COUNT_MANPATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/share/man:1;/opt/ohpc/pub/libs/hwloc/man:1;/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/share/man:1;/opt/ohpc/pub/compiler/gcc/13.2.0/share/man:1;/opt/ohpc/pub/utils/autotools/share/man:1;/usr/local/share/man:2;/usr/share/man/overrides:2;/usr/share/man/en:2;/usr/share/man:2;/opt/ohpc/admin/lmod/lmod/share/man:1;/home/108/u108008/.nvm/versions/node/v24.13.0/share/man:1;:1
+__LMOD_REF_COUNT_MODULEPATH=/opt/ohpc/pub/moduledeps/gnu13-openmpi5:1;/opt/ohpc/pub/moduledeps/gnu13:1;/opt/ohpc/pub/modulefiles:1
+__LMOD_REF_COUNT_PATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/bin:1;/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/bin:1;/opt/ohpc/pub/libs/hwloc/bin:1;/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/bin:1;/opt/ohpc/pub/compiler/gcc/13.2.0/bin:1;/opt/ohpc/pub/utils/prun/2.2:1;/opt/ohpc/pub/utils/autotools/bin:1;/opt/ohpc/pub/bin:1;/home/108/u108008/.vscode-server/data/User/globalStorage/github.copilot-chat/debugCommand:1;/home/108/u108008/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli:1;/home/108/u108008/.vscode-server/cli/servers/Stable-ce099c1ed25d9eb3076c11e4a280f3eb52b4fbeb/server/bin/remote-cli:1;/home/108/u108008/.nvm/versions/node/v24.13.0/bin:1;/home/108/u108008/miniconda3/condabin:1;/usr/bin:1;/bin:1;/usr/local/sbin:1;/usr/sbin:1;/home/108/u108008/.vscode-server/extensions/ms-python.debugpy-2025.19.2025121701/bundled/scripts/noConfigScripts:1
+__LMOD_REF_COUNT_PKG_CONFIG_PATH=/opt/ohpc/pub/mpi/libfabric/1.18.0/lib/pkgconfig:1;/opt/ohpc/pub/mpi/ucx-ohpc/1.18.0/lib/pkgconfig:1;/opt/ohpc/pub/mpi/openmpi5-gnu13/5.0.5/lib/pkgconfig:1
+build_alias=x86_64-conda-linux-gnu
+host_alias=x86_64-conda-linux-gnu
+which_declare=declare -f
+
+INFO 2026-03-25 12:58:37,508 trainer.py:1103: Setting up components: Model, loss, optim, meters etc.
+INFO 2026-03-25 12:58:37,518 logger.py:  61: TensorBoard SummaryWriter instantiated. Files will be stored in: outputs/isaid_eval_from_dlrsd_soft_ckpt2/tensorboard
+[RS FREEZE] env SAM3_RS_FREEZE=0
+[RS FREEZE] env SAM3_RS_TRAIN_MODE=minimal
+[RS FREEZE] skip freezing because SAM3_RS_FREEZE != 1
+INFO 2026-03-25 12:58:47,041 trainer.py:1174: ====================
+INFO 2026-03-25 12:58:47,042 trainer.py:1175: Summary for model <class 'sam3.model.rs_prompt_semantic_model.RSPromptSemanticModel'>
+INFO 2026-03-25 12:58:47,046 trainer.py:1176: Model is RSPromptSemanticModel(
+  (sam3): Sam3Image(
+    (backbone): SAM3VLBackbone(
+      (vision_backbone): Sam3DualViTDetNeck(
+        (trunk): ViT(
+          (patch_embed): PatchEmbed(
+            (proj): Conv2d(3, 1024, kernel_size=(14, 14), stride=(14, 14), bias=False)
+          )
+          (blocks): ModuleList(
+            (0): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): Identity()
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (1): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.003)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (2): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.006)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (3): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.010)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (4): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.013)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (5): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.016)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (6): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.019)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (7): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.023)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (8): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.026)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (9): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.029)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (10): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.032)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (11): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.035)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (12): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.039)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (13): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.042)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (14): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.045)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (15): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.048)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (16): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.052)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (17): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.055)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (18): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.058)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (19): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.061)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (20): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.065)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (21): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.068)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (22): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.071)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (23): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.074)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (24): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.077)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (25): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.081)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (26): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.084)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (27): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.087)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (28): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.090)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (29): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.094)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (30): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.097)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (31): Block(
+              (norm1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (attn): Attention(
+                (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+                (proj): Linear(in_features=1024, out_features=1024, bias=True)
+              )
+              (ls1): Identity()
+              (drop_path): DropPath(drop_prob=0.100)
+              (norm2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+              (mlp): Mlp(
+                (fc1): Linear(in_features=1024, out_features=4736, bias=True)
+                (act): GELU(approximate='none')
+                (drop1): Dropout(p=0.0, inplace=False)
+                (norm): Identity()
+                (fc2): Linear(in_features=4736, out_features=1024, bias=True)
+                (drop2): Dropout(p=0.0, inplace=False)
+              )
+              (ls2): Identity()
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+          )
+          (ln_pre): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+          (ln_post): Identity()
+        )
+        (position_encoding): PositionEmbeddingSine()
+        (convs): ModuleList(
+          (0): Sequential(
+            (dconv_2x2_0): ConvTranspose2d(1024, 512, kernel_size=(2, 2), stride=(2, 2))
+            (gelu): GELU(approximate='none')
+            (dconv_2x2_1): ConvTranspose2d(512, 256, kernel_size=(2, 2), stride=(2, 2))
+            (conv_1x1): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1))
+            (conv_3x3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+          (1): Sequential(
+            (dconv_2x2): ConvTranspose2d(1024, 512, kernel_size=(2, 2), stride=(2, 2))
+            (conv_1x1): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1))
+            (conv_3x3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+          (2): Sequential(
+            (conv_1x1): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1))
+            (conv_3x3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+          (3): Sequential(
+            (maxpool_2x2): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+            (conv_1x1): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1))
+            (conv_3x3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+        )
+      )
+      (language_backbone): VETextEncoder(
+        (encoder): TextTransformer(
+          (token_embedding): Embedding(49408, 1024)
+          (transformer): Transformer(
+            (resblocks): ModuleList(
+              (0-23): 24 x ResidualAttentionBlock(
+                (attn): MultiheadAttention(
+                  (out_proj): NonDynamicallyQuantizableLinear(in_features=1024, out_features=1024, bias=True)
+                )
+                (ln_1): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+                (ln_2): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+                (ls_1): Identity()
+                (ls_2): Identity()
+                (mlp): Sequential(
+                  (c_fc): Linear(in_features=1024, out_features=4096, bias=True)
+                  (gelu): GELU(approximate='none')
+                  (c_proj): Linear(in_features=4096, out_features=1024, bias=True)
+                )
+              )
+            )
+          )
+          (ln_final): LayerNorm((1024,), eps=1e-05, elementwise_affine=True)
+        )
+        (resizer): Linear(in_features=1024, out_features=256, bias=True)
+      )
+    )
+    (geometry_encoder): SequenceGeometryEncoder(
+      (pos_enc): PositionEmbeddingSine()
+      (label_embed): Embedding(2, 256)
+      (cls_embed): Embedding(1, 256)
+      (points_direct_project): Linear(in_features=2, out_features=256, bias=True)
+      (points_pool_project): Linear(in_features=256, out_features=256, bias=True)
+      (points_pos_enc_project): Linear(in_features=256, out_features=256, bias=True)
+      (boxes_direct_project): Linear(in_features=4, out_features=256, bias=True)
+      (boxes_pool_project): Conv2d(256, 256, kernel_size=(7, 7), stride=(1, 1))
+      (boxes_pos_enc_project): Linear(in_features=258, out_features=256, bias=True)
+      (final_proj): Linear(in_features=256, out_features=256, bias=True)
+      (norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+      (img_pre_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+      (encode): ModuleList(
+        (0-2): 3 x TransformerEncoderLayer(
+          (self_attn): MultiheadAttentionWrapper(
+            (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+          )
+          (cross_attn_image): MultiheadAttentionWrapper(
+            (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+          )
+          (linear1): Linear(in_features=256, out_features=2048, bias=True)
+          (dropout): Dropout(p=0.1, inplace=False)
+          (linear2): Linear(in_features=2048, out_features=256, bias=True)
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (norm3): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (dropout1): Dropout(p=0.1, inplace=False)
+          (dropout2): Dropout(p=0.1, inplace=False)
+          (dropout3): Dropout(p=0.1, inplace=False)
+        )
+      )
+      (encode_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+    )
+    (transformer): TransformerWrapper(
+      (encoder): TransformerEncoderFusion(
+        (layers): ModuleList(
+          (0-5): 6 x TransformerEncoderLayer(
+            (self_attn): MultiheadAttentionWrapper(
+              (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+            )
+            (cross_attn_image): MultiheadAttentionWrapper(
+              (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+            )
+            (linear1): Linear(in_features=256, out_features=2048, bias=True)
+            (dropout): Dropout(p=0.1, inplace=False)
+            (linear2): Linear(in_features=2048, out_features=256, bias=True)
+            (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (norm3): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (dropout1): Dropout(p=0.1, inplace=False)
+            (dropout2): Dropout(p=0.1, inplace=False)
+            (dropout3): Dropout(p=0.1, inplace=False)
+          )
+        )
+      )
+      (decoder): TransformerDecoder(
+        (layers): ModuleList(
+          (0-5): 6 x TransformerDecoderLayer(
+            (cross_attn): MultiheadAttentionWrapper(
+              (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+            )
+            (dropout1): Dropout(p=0.1, inplace=False)
+            (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (ca_text): MultiheadAttention(
+              (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+            )
+            (catext_dropout): Dropout(p=0.1, inplace=False)
+            (catext_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (self_attn): MultiheadAttention(
+              (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+            )
+            (dropout2): Dropout(p=0.1, inplace=False)
+            (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            (linear1): Linear(in_features=256, out_features=2048, bias=True)
+            (dropout3): Dropout(p=0.1, inplace=False)
+            (linear2): Linear(in_features=2048, out_features=256, bias=True)
+            (dropout4): Dropout(p=0.1, inplace=False)
+            (norm3): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          )
+        )
+        (norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+        (bbox_embed): MLP(
+          (layers): ModuleList(
+            (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+            (2): Linear(in_features=256, out_features=4, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+        (query_embed): Embedding(200, 256)
+        (reference_points): Embedding(200, 4)
+        (boxRPB_embed_x): MLP(
+          (layers): ModuleList(
+            (0): Linear(in_features=2, out_features=256, bias=True)
+            (1): Linear(in_features=256, out_features=8, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+        (boxRPB_embed_y): MLP(
+          (layers): ModuleList(
+            (0): Linear(in_features=2, out_features=256, bias=True)
+            (1): Linear(in_features=256, out_features=8, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+        (presence_token): Embedding(1, 256)
+        (presence_token_head): MLP(
+          (layers): ModuleList(
+            (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+            (2): Linear(in_features=256, out_features=1, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+        (presence_token_out_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+        (ref_point_head): MLP(
+          (layers): ModuleList(
+            (0): Linear(in_features=512, out_features=256, bias=True)
+            (1): Linear(in_features=256, out_features=256, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+      )
+    )
+    (segmentation_head): UniversalSegmentationHead(
+      (pixel_decoder): PixelDecoder(
+        (conv_layers): ModuleList(
+          (0-2): 3 x Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        )
+        (norms): ModuleList(
+          (0-2): 3 x GroupNorm(8, 256, eps=1e-05, affine=True)
+        )
+      )
+      (mask_predictor): MaskPredictor(
+        (mask_embed): MLP(
+          (layers): ModuleList(
+            (0-2): 3 x Linear(in_features=256, out_features=256, bias=True)
+          )
+          (drop): Identity()
+          (out_norm): Identity()
+        )
+      )
+      (cross_attend_prompt): MultiheadAttentionWrapper(
+        (out_proj): NonDynamicallyQuantizableLinear(in_features=256, out_features=256, bias=True)
+      )
+      (cross_attn_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+      (semantic_seg_head): Conv2d(256, 1, kernel_size=(1, 1), stride=(1, 1))
+      (instance_seg_head): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1))
+    )
+    (dot_prod_scoring): DotProductScoring(
+      (prompt_mlp): MLP(
+        (layers): ModuleList(
+          (0): Linear(in_features=256, out_features=2048, bias=True)
+          (1): Linear(in_features=2048, out_features=256, bias=True)
+        )
+        (drop): Dropout(p=0.1, inplace=False)
+        (out_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+      )
+      (prompt_proj): Linear(in_features=256, out_features=256, bias=True)
+      (hs_proj): Linear(in_features=256, out_features=256, bias=True)
+    )
+    (matcher): BinaryHungarianMatcherV2(
+      (norm): Sigmoid()
+    )
+  )
+)
+INFO 2026-03-25 12:58:47,063 trainer.py:1177: 	Total parameters 840 M
+INFO 2026-03-25 12:58:47,063 trainer.py:1178: 	Trainable parameters 8.7 K
+INFO 2026-03-25 12:58:47,063 trainer.py:1181: 	Non-Trainable parameters 840 M
+INFO 2026-03-25 12:58:47,160 trainer.py:1184: ====================
+INFO 2026-03-25 12:58:48,697 trainer.py:1138: Finished setting up components: Model, loss, optim, meters etc.
+[AFTER FREEZE] total=840518454, trainable=8704, frozen=840509750
+[TRAINABLE] soft_prompt
+INFO 2026-03-25 12:58:48,704 trainer.py: 353: Moving components to device cuda:0 and local rank 0.
+INFO 2026-03-25 12:58:49,292 trainer.py: 359: Done moving components to device cuda:0 and local rank 0.
+[RSSingleQueryDataset] first query keys: ['id', 'image_id', 'query_text', 'object_ids_output', 'is_exhaustive', 'is_pixel_exhaustive', 'query_processing_order', 'original_cat_id', 'ptr_x_query_id', 'ptr_y_query_id', 'input_box', 'input_box_label', 'input_points']
+[RSSingleQueryDataset] Loaded 10063 samples from data/sam3_semantic_fixed/isaid/val.sam3.semantic.json
+INFO 2026-03-25 12:58:50,125 trainer.py: 467: Resuming training from outputs/isaid_eval_from_dlrsd_soft_ckpt2/checkpoints/checkpoint.pt
+/home/108/u108008/code/SegEarth-OV-3/sam3/train/trainer.py:470: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(f, map_location="cpu")
+INFO 2026-03-25 12:59:20,122 trainer.py: 328: World size == 1, skipping DistributedDataParallel wrapping.
+[RSPromptSemanticModel] total_params=840518454, trainable_params=8704, frozen_params=840509750
+[RSPromptSemanticModel][TRAINABLE] soft_prompt
+INFO 2026-03-25 12:59:34,726 train_utils.py: 268: Val Epoch: [2][  0/629] | Batch Time: 14.60 (14.60) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 38m | Losses/val_all_loss: 7.21e+01 (7.21e+01)
+INFO 2026-03-25 13:01:27,567 train_utils.py: 268: Val Epoch: [2][ 10/629] | Batch Time: 11.35 (11.59) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 40m | Losses/val_all_loss: 7.59e+01 (7.03e+01)
+INFO 2026-03-25 13:03:09,274 train_utils.py: 268: Val Epoch: [2][ 20/629] | Batch Time: 10.15 (10.91) | Data Time: 0.12 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 42m | Losses/val_all_loss: 8.72e+01 (6.94e+01)
+INFO 2026-03-25 13:05:10,410 train_utils.py: 268: Val Epoch: [2][ 30/629] | Batch Time: 10.17 (11.30) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 44m | Losses/val_all_loss: 9.38e+01 (6.96e+01)
+INFO 2026-03-25 13:07:15,470 train_utils.py: 268: Val Epoch: [2][ 40/629] | Batch Time: 10.19 (11.59) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 46m | Losses/val_all_loss: 7.54e+01 (7.00e+01)
+INFO 2026-03-25 13:09:42,020 train_utils.py: 268: Val Epoch: [2][ 50/629] | Batch Time: 14.69 (12.19) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 48m | Losses/val_all_loss: 5.12e+01 (6.75e+01)
+INFO 2026-03-25 13:11:41,966 train_utils.py: 268: Val Epoch: [2][ 60/629] | Batch Time: 13.34 (12.16) | Data Time: 0.16 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 50m | Losses/val_all_loss: 8.34e+01 (6.80e+01)
+INFO 2026-03-25 13:13:34,040 train_utils.py: 268: Val Epoch: [2][ 70/629] | Batch Time: 12.80 (12.03) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 52m | Losses/val_all_loss: 7.76e+01 (7.05e+01)
+INFO 2026-03-25 13:15:32,599 train_utils.py: 268: Val Epoch: [2][ 80/629] | Batch Time: 15.87 (12.01) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 54m | Losses/val_all_loss: 7.26e+01 (6.93e+01)
+INFO 2026-03-25 13:17:24,537 train_utils.py: 268: Val Epoch: [2][ 90/629] | Batch Time: 9.98 (11.92) | Data Time: 0.14 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 56m | Losses/val_all_loss: 6.93e+01 (6.92e+01)
+INFO 2026-03-25 13:19:21,827 train_utils.py: 268: Val Epoch: [2][100/629] | Batch Time: 11.93 (11.90) | Data Time: 0.12 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 58m | Losses/val_all_loss: 5.52e+01 (6.94e+01)
+INFO 2026-03-25 13:21:03,103 train_utils.py: 268: Val Epoch: [2][110/629] | Batch Time: 11.79 (11.74) | Data Time: 0.14 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 14h 59m | Losses/val_all_loss: 5.61e+01 (6.94e+01)
+INFO 2026-03-25 13:23:16,634 train_utils.py: 268: Val Epoch: [2][120/629] | Batch Time: 14.92 (11.87) | Data Time: 0.12 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 02m | Losses/val_all_loss: 4.66e+01 (6.84e+01)
+INFO 2026-03-25 13:25:23,087 train_utils.py: 268: Val Epoch: [2][130/629] | Batch Time: 10.13 (11.93) | Data Time: 0.12 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 04m | Losses/val_all_loss: 5.89e+01 (6.80e+01)
+INFO 2026-03-25 13:27:14,876 train_utils.py: 268: Val Epoch: [2][140/629] | Batch Time: 10.74 (11.88) | Data Time: 0.13 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 06m | Losses/val_all_loss: 6.86e+01 (6.80e+01)
+INFO 2026-03-25 13:29:23,493 train_utils.py: 268: Val Epoch: [2][150/629] | Batch Time: 16.23 (11.94) | Data Time: 0.11 (0.13) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 08m | Losses/val_all_loss: 3.95e+01 (6.71e+01)
+INFO 2026-03-25 13:31:32,758 train_utils.py: 268: Val Epoch: [2][160/629] | Batch Time: 12.74 (12.00) | Data Time: 0.72 (0.14) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 10m | Losses/val_all_loss: 5.78e+01 (6.58e+01)
+INFO 2026-03-25 13:33:46,974 train_utils.py: 268: Val Epoch: [2][170/629] | Batch Time: 12.38 (12.09) | Data Time: 0.28 (0.19) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 12m | Losses/val_all_loss: 4.59e+01 (6.49e+01)
+INFO 2026-03-25 13:36:00,902 train_utils.py: 268: Val Epoch: [2][180/629] | Batch Time: 10.53 (12.16) | Data Time: 0.33 (0.28) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 14m | Losses/val_all_loss: 5.75e+01 (6.41e+01)
+INFO 2026-03-25 13:38:21,560 train_utils.py: 268: Val Epoch: [2][190/629] | Batch Time: 13.77 (12.26) | Data Time: 0.26 (0.30) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 17m | Losses/val_all_loss: 6.87e+01 (6.39e+01)
+INFO 2026-03-25 13:40:31,103 train_utils.py: 268: Val Epoch: [2][200/629] | Batch Time: 11.36 (12.29) | Data Time: 0.26 (0.30) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 19m | Losses/val_all_loss: 5.55e+01 (6.30e+01)
+INFO 2026-03-25 13:43:01,313 train_utils.py: 268: Val Epoch: [2][210/629] | Batch Time: 13.65 (12.42) | Data Time: 0.36 (0.31) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 21m | Losses/val_all_loss: 5.82e+01 (6.28e+01)
+INFO 2026-03-25 13:45:02,388 train_utils.py: 268: Val Epoch: [2][220/629] | Batch Time: 12.48 (12.41) | Data Time: 0.24 (0.31) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 23m | Losses/val_all_loss: 5.33e+01 (6.25e+01)
+INFO 2026-03-25 13:47:29,970 train_utils.py: 268: Val Epoch: [2][230/629] | Batch Time: 17.33 (12.51) | Data Time: 0.13 (0.30) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 26m | Losses/val_all_loss: 6.28e+01 (6.23e+01)
+INFO 2026-03-25 13:49:56,122 train_utils.py: 268: Val Epoch: [2][240/629] | Batch Time: 11.39 (12.60) | Data Time: 0.12 (0.29) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 28m | Losses/val_all_loss: 6.12e+01 (6.22e+01)
+INFO 2026-03-25 13:51:51,987 train_utils.py: 268: Val Epoch: [2][250/629] | Batch Time: 11.23 (12.56) | Data Time: 0.13 (0.29) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 30m | Losses/val_all_loss: 7.45e+01 (6.25e+01)
+INFO 2026-03-25 13:53:46,189 train_utils.py: 268: Val Epoch: [2][260/629] | Batch Time: 10.57 (12.51) | Data Time: 0.12 (0.28) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 32m | Losses/val_all_loss: 6.59e+01 (6.25e+01)
+INFO 2026-03-25 13:55:49,359 train_utils.py: 268: Val Epoch: [2][270/629] | Batch Time: 14.39 (12.51) | Data Time: 0.12 (0.27) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 34m | Losses/val_all_loss: 4.87e+01 (6.25e+01)
+INFO 2026-03-25 13:57:41,147 train_utils.py: 268: Val Epoch: [2][280/629] | Batch Time: 11.05 (12.46) | Data Time: 0.12 (0.27) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 36m | Losses/val_all_loss: 5.21e+01 (6.24e+01)
+INFO 2026-03-25 13:59:52,400 train_utils.py: 268: Val Epoch: [2][290/629] | Batch Time: 15.68 (12.48) | Data Time: 0.13 (0.27) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 38m | Losses/val_all_loss: 6.37e+01 (6.19e+01)
+INFO 2026-03-25 14:01:37,763 train_utils.py: 268: Val Epoch: [2][300/629] | Batch Time: 12.67 (12.42) | Data Time: 0.25 (0.26) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 40m | Losses/val_all_loss: 7.47e+01 (6.18e+01)
+INFO 2026-03-25 14:03:40,236 train_utils.py: 268: Val Epoch: [2][310/629] | Batch Time: 15.49 (12.41) | Data Time: 2.09 (0.28) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 42m | Losses/val_all_loss: 4.78e+01 (6.14e+01)
+INFO 2026-03-25 14:06:09,453 train_utils.py: 268: Val Epoch: [2][320/629] | Batch Time: 18.88 (12.49) | Data Time: 0.85 (0.30) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 45m | Losses/val_all_loss: 4.62e+01 (6.11e+01)
+INFO 2026-03-25 14:09:05,589 train_utils.py: 268: Val Epoch: [2][330/629] | Batch Time: 17.07 (12.64) | Data Time: 0.76 (0.38) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 47m | Losses/val_all_loss: 6.00e+01 (6.07e+01)
+INFO 2026-03-25 14:11:56,085 train_utils.py: 268: Val Epoch: [2][340/629] | Batch Time: 16.33 (12.77) | Data Time: 0.40 (0.44) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 50m | Losses/val_all_loss: 5.92e+01 (6.06e+01)
+INFO 2026-03-25 14:14:00,692 train_utils.py: 268: Val Epoch: [2][350/629] | Batch Time: 10.75 (12.77) | Data Time: 0.73 (0.44) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 52m | Losses/val_all_loss: 7.13e+01 (6.09e+01)
+INFO 2026-03-25 14:15:55,283 train_utils.py: 268: Val Epoch: [2][360/629] | Batch Time: 14.13 (12.73) | Data Time: 0.98 (0.45) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 54m | Losses/val_all_loss: 4.50e+01 (6.05e+01)
+INFO 2026-03-25 14:18:04,294 train_utils.py: 268: Val Epoch: [2][370/629] | Batch Time: 12.99 (12.73) | Data Time: 0.38 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 56m | Losses/val_all_loss: 2.21e+01 (5.97e+01)
+INFO 2026-03-25 14:20:08,660 train_utils.py: 268: Val Epoch: [2][380/629] | Batch Time: 11.17 (12.73) | Data Time: 0.79 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 15h 59m | Losses/val_all_loss: 6.54e+01 (5.90e+01)
+INFO 2026-03-25 14:22:17,547 train_utils.py: 268: Val Epoch: [2][390/629] | Batch Time: 10.51 (12.73) | Data Time: 0.43 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 01m | Losses/val_all_loss: 7.48e+01 (5.90e+01)
+INFO 2026-03-25 14:23:56,900 train_utils.py: 268: Val Epoch: [2][400/629] | Batch Time: 12.98 (12.66) | Data Time: 0.32 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 02m | Losses/val_all_loss: 6.44e+01 (5.89e+01)
+INFO 2026-03-25 14:26:16,058 train_utils.py: 268: Val Epoch: [2][410/629] | Batch Time: 11.91 (12.69) | Data Time: 0.60 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 05m | Losses/val_all_loss: 4.64e+01 (5.89e+01)
+INFO 2026-03-25 14:28:19,602 train_utils.py: 268: Val Epoch: [2][420/629] | Batch Time: 12.92 (12.68) | Data Time: 0.26 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 07m | Losses/val_all_loss: 7.07e+01 (5.89e+01)
+INFO 2026-03-25 14:30:09,613 train_utils.py: 268: Val Epoch: [2][430/629] | Batch Time: 11.73 (12.64) | Data Time: 0.27 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 09m | Losses/val_all_loss: 6.44e+01 (5.90e+01)
+INFO 2026-03-25 14:31:50,213 train_utils.py: 268: Val Epoch: [2][440/629] | Batch Time: 13.82 (12.59) | Data Time: 0.55 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 10m | Losses/val_all_loss: 7.68e+01 (5.93e+01)
+INFO 2026-03-25 14:33:58,431 train_utils.py: 268: Val Epoch: [2][450/629] | Batch Time: 15.79 (12.59) | Data Time: 0.32 (0.45) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 12m | Losses/val_all_loss: 4.44e+01 (5.93e+01)
+INFO 2026-03-25 14:35:46,059 train_utils.py: 268: Val Epoch: [2][460/629] | Batch Time: 4.71 (12.55) | Data Time: 0.24 (0.45) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 14m | Losses/val_all_loss: 6.30e+01 (5.94e+01)
+INFO 2026-03-25 14:37:36,700 train_utils.py: 268: Val Epoch: [2][470/629] | Batch Time: 10.70 (12.52) | Data Time: 0.26 (0.45) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 16m | Losses/val_all_loss: 8.42e+01 (5.94e+01)
+INFO 2026-03-25 14:39:25,049 train_utils.py: 268: Val Epoch: [2][480/629] | Batch Time: 8.53 (12.48) | Data Time: 0.23 (0.45) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 18m | Losses/val_all_loss: 6.16e+01 (5.97e+01)
+INFO 2026-03-25 14:41:09,370 train_utils.py: 268: Val Epoch: [2][490/629] | Batch Time: 10.33 (12.44) | Data Time: 0.22 (0.44) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 20m | Losses/val_all_loss: 6.48e+01 (6.00e+01)
+INFO 2026-03-25 14:42:52,946 train_utils.py: 268: Val Epoch: [2][500/629] | Batch Time: 9.35 (12.40) | Data Time: 0.23 (0.44) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 21m | Losses/val_all_loss: 6.97e+01 (5.99e+01)
+INFO 2026-03-25 14:44:33,269 train_utils.py: 268: Val Epoch: [2][510/629] | Batch Time: 10.65 (12.35) | Data Time: 0.31 (0.44) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 23m | Losses/val_all_loss: 1.00e+02 (6.00e+01)
+INFO 2026-03-25 14:46:32,673 train_utils.py: 268: Val Epoch: [2][520/629] | Batch Time: 10.43 (12.35) | Data Time: 0.20 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 25m | Losses/val_all_loss: 6.45e+01 (6.04e+01)
+INFO 2026-03-25 14:48:37,318 train_utils.py: 268: Val Epoch: [2][530/629] | Batch Time: 14.83 (12.35) | Data Time: 0.47 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 27m | Losses/val_all_loss: 9.51e+01 (6.10e+01)
+INFO 2026-03-25 14:50:24,938 train_utils.py: 268: Val Epoch: [2][540/629] | Batch Time: 8.91 (12.32) | Data Time: 0.28 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 29m | Losses/val_all_loss: 6.56e+01 (6.15e+01)
+INFO 2026-03-25 14:52:29,918 train_utils.py: 268: Val Epoch: [2][550/629] | Batch Time: 11.95 (12.32) | Data Time: 0.35 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 31m | Losses/val_all_loss: 5.11e+01 (6.17e+01)
+INFO 2026-03-25 14:54:28,322 train_utils.py: 268: Val Epoch: [2][560/629] | Batch Time: 12.90 (12.31) | Data Time: 0.76 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 33m | Losses/val_all_loss: 6.11e+01 (6.17e+01)
+INFO 2026-03-25 14:56:41,263 train_utils.py: 268: Val Epoch: [2][570/629] | Batch Time: 15.85 (12.33) | Data Time: 3.22 (0.43) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 35m | Losses/val_all_loss: 5.98e+01 (6.16e+01)
+INFO 2026-03-25 14:58:59,414 train_utils.py: 268: Val Epoch: [2][580/629] | Batch Time: 10.74 (12.36) | Data Time: 0.18 (0.46) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 37m | Losses/val_all_loss: 7.61e+01 (6.15e+01)
+INFO 2026-03-25 15:01:04,364 train_utils.py: 268: Val Epoch: [2][590/629] | Batch Time: 15.61 (12.36) | Data Time: 3.94 (0.49) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 39m | Losses/val_all_loss: 4.61e+01 (6.15e+01)
+INFO 2026-03-25 15:02:54,064 train_utils.py: 268: Val Epoch: [2][600/629] | Batch Time: 13.90 (12.34) | Data Time: 0.29 (0.49) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 41m | Losses/val_all_loss: 8.67e+01 (6.14e+01)
+INFO 2026-03-25 15:04:55,494 train_utils.py: 268: Val Epoch: [2][610/629] | Batch Time: 10.67 (12.33) | Data Time: 0.40 (0.50) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 43m | Losses/val_all_loss: 6.47e+01 (6.17e+01)
+INFO 2026-03-25 15:06:44,770 train_utils.py: 268: Val Epoch: [2][620/629] | Batch Time: 14.11 (12.31) | Data Time: 0.46 (0.49) | Mem (GB): 13.00 (13.00/13.00) | Time Elapsed: 00d 16h 45m | Losses/val_all_loss: 7.37e+01 (6.17e+01)
+INFO 2026-03-25 15:08:12,500 trainer.py:1065: Estimated time remaining: -1d 21h 51m
+INFO 2026-03-25 15:08:12,502 trainer.py:1007: Synchronizing meters
+INFO 2026-03-25 15:08:12,527 trainer.py: 784: Meters: {'Losses/val_all_loss': 61.77839401656041, 'Losses/val_all_loss_semantic_seg': 1.9039070300834144, 'Losses/val_all_loss_semantic_dice': 0.7900084490912531, 'Losses/val_all_miou_semantic_seg': 0.10594945522266781, 'Losses/val_all_core_loss': 61.77839401656041, 'Trainer/where': 0.0, 'Trainer/epoch': 2, 'Trainer/steps_val': 986}
