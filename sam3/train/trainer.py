@@ -7,7 +7,9 @@ import json
 import logging
 import math
 import os
+import re
 import time
+from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
@@ -16,6 +18,8 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
 import torch.nn as nn
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
@@ -57,6 +61,567 @@ from sam3.train.utils.train_utils import (
 
 
 CORE_LOSS_KEY = "core_loss"
+
+def _unwrap_stage_output(find_stages):
+    if isinstance(find_stages, dict):
+        return find_stages
+    if isinstance(find_stages, list):
+        x = find_stages[-1]
+        if isinstance(x, list):
+            x = x[-1]
+        if isinstance(x, dict):
+            return x
+    # SAM3Output 通常也支持 len()/索引
+    if hasattr(find_stages, "__len__") and len(find_stages) > 0:
+        x = find_stages[-1]
+        if isinstance(x, list):
+            x = x[-1]
+        if isinstance(x, dict):
+            return x
+    raise TypeError(f"Cannot unwrap find_stages of type={type(find_stages)}")
+
+
+def _to_cpu(x):
+    if torch.is_tensor(x):
+        return x.detach().cpu()
+    return x
+
+
+def _tensor_brief(x):
+    x = _to_cpu(x)
+    if not torch.is_tensor(x):
+        return {"type": str(type(x))}
+    out = {
+        "shape": list(x.shape),
+        "dtype": str(x.dtype),
+    }
+    if x.numel() > 0:
+        if x.dtype == torch.bool:
+            out["true_ratio"] = float(x.float().mean().item())
+        else:
+            out["min"] = float(x.min().item())
+            out["max"] = float(x.max().item())
+            out["mean"] = float(x.float().mean().item())
+    return out
+
+
+def _summarize_obj(obj, depth=2):
+    if depth < 0:
+        return str(type(obj))
+    if torch.is_tensor(obj):
+        return _tensor_brief(obj)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _summarize_obj(v, depth - 1) for k, v in list(obj.items())[:20]}
+    if isinstance(obj, (list, tuple)):
+        return {
+            "type": type(obj).__name__,
+            "len": len(obj),
+            "items": [_summarize_obj(v, depth - 1) for v in list(obj)[:5]],
+        }
+    if hasattr(obj, "__dict__"):
+        return {
+            "type": type(obj).__name__,
+            "attrs": {
+                k: _summarize_obj(v, depth - 1)
+                for k, v in list(vars(obj).items())[:30]
+            },
+        }
+    return str(type(obj))
+
+
+def _denorm_img(img):
+    # 你的 dataset 当前是 mean=0.5/std=0.5 的 [-1,1] 规范化
+    img = img.float()
+    img = img * 0.5 + 0.5
+    return img.clamp(0.0, 1.0)
+
+_DEBUG_JSON_LOOKUP_CACHE = {}
+
+
+def _slugify(text: str) -> str:
+    text = str(text).strip().lower()
+    text = re.sub(r"[^\w\-]+", "_", text)
+    text = re.sub(r"_+", "_", text)
+    text = text.strip("_")
+    return text or "unknown"
+
+
+def _resolve_query_text_from_json_query(q: Dict[str, Any]) -> str:
+    for k in ["query_text", "text", "text_input", "queried_category"]:
+        if k in q and q[k] is not None:
+            return str(q[k])
+    return "unknown"
+
+
+def _resolve_ann_ids_from_json_query(q: Dict[str, Any]) -> List[int]:
+    if "object_ids_output" in q:
+        obj_ids = q["object_ids_output"]
+        if obj_ids is None:
+            return []
+        if not isinstance(obj_ids, list):
+            obj_ids = [obj_ids]
+        return [int(x) for x in obj_ids if x is not None]
+
+    if "annotation_id" in q:
+        ann_id = q["annotation_id"]
+        if ann_id is None:
+            return []
+        return [int(ann_id)]
+
+    return []
+
+
+def _get_dataset_for_phase(trainer, phase: str):
+    if phase == Phase.TRAIN:
+        return getattr(trainer, "train_dataset", None)
+    return getattr(trainer, "val_dataset", None)
+
+
+def _discover_ann_file_and_img_root(dataset):
+    candidates = [dataset]
+    for attr in ["dataset", "base_dataset", "_dataset"]:
+        if hasattr(dataset, attr):
+            candidates.append(getattr(dataset, attr))
+
+    for ds in candidates:
+        ann_file = getattr(ds, "ann_file", None)
+        img_folder = getattr(ds, "img_folder", None)
+        if ann_file is not None and img_folder is not None:
+            return str(ann_file), str(img_folder)
+    return None, None
+
+
+def _get_or_build_json_lookup(ann_file: Optional[str]):
+    if ann_file is None:
+        return None
+
+    ann_file = str(ann_file)
+    if ann_file in _DEBUG_JSON_LOOKUP_CACHE:
+        return _DEBUG_JSON_LOOKUP_CACHE[ann_file]
+
+    try:
+        with open(ann_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[DEBUG] failed to read ann_file for debug naming: {ann_file} | {e}")
+        _DEBUG_JSON_LOOKUP_CACHE[ann_file] = None
+        return None
+
+    images = data.get("images", [])
+    annotations = data.get("annotations", [])
+    queries = data.get("queries", [])
+
+    image_by_id = {}
+    for img in images:
+        if "id" in img:
+            image_by_id[int(img["id"])] = img
+
+    ann_by_id = {}
+    for ann in annotations:
+        if "id" in ann:
+            ann_by_id[int(ann["id"])] = ann
+
+    qid_by_first_key = {}
+    qid_by_text_img = {}
+
+    for i, q in enumerate(queries):
+        ann_ids = _resolve_ann_ids_from_json_query(q)
+        if len(ann_ids) == 0:
+            continue
+
+        query_text = _resolve_query_text_from_json_query(q)
+        qid = int(q.get("id", i))
+        original_cat_id = int(q.get("original_cat_id", -1)) if q.get("original_cat_id") is not None else -1
+
+        image_id = q.get("image_id", None)
+        if image_id is None:
+            image_ids = list({int(ann_by_id[aid]["image_id"]) for aid in ann_ids if aid in ann_by_id})
+            if len(image_ids) == 1:
+                image_id = image_ids[0]
+        if image_id is None:
+            continue
+        image_id = int(image_id)
+
+        first_ann_id = int(ann_ids[0])
+        key1 = (image_id, query_text, first_ann_id, original_cat_id)
+        qid_by_first_key.setdefault(key1, []).append(qid)
+
+        key2 = (image_id, query_text, original_cat_id)
+        qid_by_text_img.setdefault(key2, []).append(qid)
+
+    lookup = {
+        "ann_file": ann_file,
+        "image_by_id": image_by_id,
+        "qid_by_first_key": qid_by_first_key,
+        "qid_by_text_img": qid_by_text_img,
+    }
+    _DEBUG_JSON_LOOKUP_CACHE[ann_file] = lookup
+    return lookup
+
+
+def _try_get_original_image_ids(batch):
+    if hasattr(batch, "find_metadatas") and len(batch.find_metadatas) > 0:
+        meta = batch.find_metadatas[0]
+        if isinstance(meta, dict) and "original_image_id" in meta:
+            return _to_cpu(meta["original_image_id"]).view(-1)
+        if hasattr(meta, "original_image_id"):
+            return _to_cpu(meta.original_image_id).view(-1)
+    return None
+
+
+def _try_get_original_category_ids(batch):
+    if hasattr(batch, "find_metadatas") and len(batch.find_metadatas) > 0:
+        meta = batch.find_metadatas[0]
+        if isinstance(meta, dict) and "original_category_id" in meta:
+            return _to_cpu(meta["original_category_id"]).view(-1)
+        if hasattr(meta, "original_category_id"):
+            return _to_cpu(meta.original_category_id).view(-1)
+    return None
+
+
+def _try_get_object_ids(find_targets, batch):
+    if isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict):
+        t0 = find_targets[0]
+        for k in ["object_ids_padded", "object_ids"]:
+            if k in t0 and torch.is_tensor(t0[k]):
+                v = _to_cpu(t0[k])
+                if v.ndim == 2 and v.shape[1] >= 1:
+                    return v[:, 0].view(-1)
+                return v.view(-1)
+
+    if hasattr(batch, "find_metadatas") and len(batch.find_metadatas) > 0:
+        meta = batch.find_metadatas[0]
+        if isinstance(meta, dict) and "object_id" in meta:
+            return _to_cpu(meta["object_id"]).view(-1)
+        if hasattr(meta, "object_id"):
+            return _to_cpu(meta.object_id).view(-1)
+    return None
+
+
+def _resolve_debug_identity(i, text, image_ids, object_ids, original_cat_ids, json_lookup):
+    image_id = None
+    object_id = None
+    original_cat_id = -1
+    file_name = None
+    query_id = None
+
+    if image_ids is not None and i < len(image_ids):
+        image_id = int(image_ids[i].item())
+
+    if object_ids is not None and i < len(object_ids):
+        object_id = int(object_ids[i].item())
+
+    if original_cat_ids is not None and i < len(original_cat_ids):
+        original_cat_id = int(original_cat_ids[i].item())
+
+    if json_lookup is not None and image_id is not None:
+        img_info = json_lookup["image_by_id"].get(int(image_id))
+        if img_info is not None:
+            file_name = img_info.get("file_name")
+
+        if object_id is not None:
+            key1 = (int(image_id), str(text), int(object_id), int(original_cat_id))
+            qids = json_lookup["qid_by_first_key"].get(key1, [])
+            if len(qids) == 1:
+                query_id = int(qids[0])
+
+        if query_id is None:
+            key2 = (int(image_id), str(text), int(original_cat_id))
+            qids = json_lookup["qid_by_text_img"].get(key2, [])
+            if len(qids) == 1:
+                query_id = int(qids[0])
+
+    return {
+        "image_id": image_id,
+        "object_id": object_id,
+        "original_category_id": original_cat_id,
+        "file_name": file_name,
+        "query_id": query_id,
+    }
+
+
+def _try_get_texts(batch):
+    # 1) 正确读取 text bank
+    if hasattr(batch, "find_text_batch"):
+        text_bank = getattr(batch, "find_text_batch")
+        if isinstance(text_bank, (list, tuple)):
+            text_bank = [str(x) for x in text_bank]
+
+            # 2) 用 text_ids 把每个样本映射回真实 text
+            if hasattr(batch, "find_inputs") and len(batch.find_inputs) > 0:
+                find_input = batch.find_inputs[0]
+                if hasattr(find_input, "text_ids") and torch.is_tensor(find_input.text_ids):
+                    text_ids = _to_cpu(find_input.text_ids).view(-1).tolist()
+                    out = []
+                    for tid in text_ids:
+                        tid = int(tid)
+                        if 0 <= tid < len(text_bank):
+                            out.append(text_bank[tid])
+                        else:
+                            out.append(f"<bad text id {tid}>")
+                    return out
+
+            # fallback: 只有 text bank，没有 text_ids
+            return text_bank
+
+    # 旧逻辑保留作兜底
+    for attr in ["query_texts", "texts", "find_texts"]:
+        if hasattr(batch, attr):
+            v = getattr(batch, attr)
+            if isinstance(v, (list, tuple)):
+                return [str(x) for x in v]
+
+    if hasattr(batch, "find_metadatas"):
+        metas = getattr(batch, "find_metadatas")
+        texts = []
+        ok = False
+        for m in metas:
+            if isinstance(m, dict):
+                t = m.get("query_text", m.get("text", None))
+            else:
+                t = getattr(m, "query_text", getattr(m, "text", None))
+            texts.append(None if t is None else str(t))
+            ok = ok or (t is not None)
+        if ok:
+            return texts
+
+    return None
+
+
+def _try_get_boxes(batch, find_targets):
+    # 优先用真实 prompt box
+    if hasattr(batch, "find_inputs") and len(batch.find_inputs) > 0:
+        find_input = batch.find_inputs[0]
+        if hasattr(find_input, "input_boxes") and torch.is_tensor(find_input.input_boxes):
+            return _to_cpu(find_input.input_boxes), "batch.find_inputs[0].input_boxes"
+
+    # 再兜底 batch 直挂字段
+    for attr in ["input_boxes", "find_input_boxes", "prompt_boxes", "boxes"]:
+        if hasattr(batch, attr):
+            v = getattr(batch, attr)
+            if torch.is_tensor(v) and v.ndim >= 2:
+                return _to_cpu(v), f"batch.{attr}"
+
+    # 最后才 fallback 到 target-side box
+    if isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict):
+        t0 = find_targets[0]
+        for k in ["boxes", "boxes_xyxy", "boxes_padded"]:
+            if k in t0 and torch.is_tensor(t0[k]):
+                v = t0[k]
+                if v.ndim == 3 and v.shape[1] == 1:
+                    v = v[:, 0]
+                return _to_cpu(v), f"find_targets[0]['{k}']"
+
+    return None, None
+
+def dump_trainable_params(model, save_dir):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    total = 0
+    trainable = 0
+    for name, p in model.named_parameters():
+        n = p.numel()
+        total += n
+        if p.requires_grad:
+            trainable += n
+        rows.append(
+            {
+                "name": name,
+                "shape": list(p.shape),
+                "numel": int(n),
+                "requires_grad": bool(p.requires_grad),
+            }
+        )
+
+    with open(save_dir / "trainable_params.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "total_params": int(total),
+                "trainable_params": int(trainable),
+                "frozen_params": int(total - trainable),
+                "trainable_param_names": [r["name"] for r in rows if r["requires_grad"]],
+                "all_params": rows,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    print(f"[DEBUG] saved trainable param summary -> {save_dir / 'trainable_params.json'}")
+    print(f"[DEBUG] total={total}, trainable={trainable}, frozen={total - trainable}")
+    print("[DEBUG] first 50 trainable names:")
+    shown = 0
+    for r in rows:
+        if r["requires_grad"]:
+            print("   ", r["name"])
+            shown += 1
+            if shown >= 50:
+                break
+
+
+def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_items=8, ann_file=None, img_root=None):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) 把 batch 的结构先完整存一下，便于你确认 text / input_bbox 到底在哪
+    batch_summary = {
+        "batch_type": str(type(batch)),
+        "batch_summary": _summarize_obj(batch, depth=2),
+        "find_targets_summary": _summarize_obj(find_targets, depth=2),
+    }
+    with open(save_dir / "batch_structure.json", "w", encoding="utf-8") as f:
+        json.dump(batch_summary, f, ensure_ascii=False, indent=2)
+
+    json_lookup = _get_or_build_json_lookup(ann_file)
+    image_ids = _try_get_original_image_ids(batch)
+    original_cat_ids = _try_get_original_category_ids(batch)
+    object_ids = _try_get_object_ids(find_targets, batch)
+
+    out = _unwrap_stage_output(find_stages)
+    if "semantic_seg" not in out:
+        raise KeyError(f"semantic_seg not found, stage keys={list(out.keys())}")
+
+    pred = _to_cpu(out["semantic_seg"]).float()  # [B,1,h,w]
+
+    if not hasattr(batch, "img_batch"):
+        raise AttributeError("batch has no img_batch; please inspect batch_structure.json")
+    imgs = _to_cpu(batch.img_batch)  # [B,3,H,W]
+
+    if not (isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict)):
+        raise TypeError("find_targets format unexpected; please inspect batch_structure.json")
+
+    target_dict = find_targets[0]
+    if "semantic_masks" in target_dict:
+        gt = _to_cpu(target_dict["semantic_masks"]).bool()
+    elif "masks" in target_dict:
+        gt = _to_cpu(target_dict["masks"]).bool()
+    else:
+        raise KeyError(f"Neither semantic_masks nor masks in find_targets[0]: {list(target_dict.keys())}")
+
+    pred_up = F.interpolate(pred, size=gt.shape[-2:], mode="bilinear", align_corners=False)
+    prob_up = pred_up.sigmoid()
+    pred_bin = (prob_up > 0.5).squeeze(1)  # [B,H,W]
+
+    texts = _try_get_texts(batch)
+    boxes, box_source = _try_get_boxes(batch, find_targets)
+
+    B = min(int(imgs.shape[0]), int(gt.shape[0]), int(pred_bin.shape[0]), max_items)
+
+    with open(save_dir / "batch_level_stats.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "img_batch": _tensor_brief(imgs),
+                "gt": _tensor_brief(gt),
+                "pred": _tensor_brief(pred),
+                "pred_up": _tensor_brief(pred_up),
+                "pred_bin": _tensor_brief(pred_bin),
+                "texts_found": texts is not None,
+                "box_source": box_source,
+                "ann_file": ann_file,
+                "img_root": img_root,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    visual_rows = []
+
+    for i in range(B):
+        img = _denorm_img(imgs[i]).permute(1, 2, 0).numpy()
+        gti = gt[i].numpy()
+        pbi = pred_bin[i].numpy()
+        probi = prob_up[i, 0].numpy()
+
+        title_text = texts[i] if texts is not None and i < len(texts) else "<text not found in batch>"
+        identity = _resolve_debug_identity(
+            i=i,
+            text=title_text,
+            image_ids=image_ids,
+            object_ids=object_ids,
+            original_cat_ids=original_cat_ids,
+            json_lookup=json_lookup,
+        )
+
+        image_id = identity["image_id"]
+        query_id = identity["query_id"]
+        file_name = identity["file_name"]
+
+        img_id_str = str(image_id) if image_id is not None else "UNK"
+        qid_str = str(query_id) if query_id is not None else "UNK"
+        debug_name = f"{i:04d}_{_slugify(title_text)}_img{img_id_str}_q{qid_str}.png"
+
+        fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+
+        axes[0].imshow(img)
+        title_lines = [
+            f"text={title_text}",
+            f"img_id={img_id_str} qid={qid_str}",
+        ]
+        if file_name is not None:
+            title_lines.append(f"file={file_name}")
+        axes[0].set_title("".join(title_lines))
+        axes[0].axis("off")
+
+        axes[1].imshow(img)
+        axes[1].imshow(gti, alpha=0.45)
+        axes[1].set_title(f"GT maskfg_ratio={gti.mean():.4f}")
+        axes[1].axis("off")
+
+        axes[2].imshow(img)
+        axes[2].imshow(pbi, alpha=0.45)
+        axes[2].set_title(f"Pred bin@0.5fg_ratio={pbi.mean():.4f}")
+        axes[2].axis("off")
+
+        axes[3].imshow(probi, cmap="viridis")
+        axes[3].set_title(f"Pred prob upsampled mean={probi.mean():.4f}")
+        axes[3].axis("off")
+
+        if boxes is not None and i < len(boxes):
+            box = boxes[i]
+            if torch.is_tensor(box):
+                box = box.flatten().tolist()
+            if len(box) == 4:
+                x1, y1, a, b = box
+                if box_source and "xyxy" in box_source:
+                    x2, y2 = a, b
+                    w = max(0.0, x2 - x1)
+                    h = max(0.0, y2 - y1)
+                else:
+                    w = a
+                    h = b
+                import matplotlib.patches as patches
+                rect = patches.Rectangle((x1, y1), w, h, linewidth=2, edgecolor="red", facecolor="none")
+                axes[0].add_patch(rect)
+
+        fig.tight_layout()
+        fig.savefig(save_dir / debug_name, dpi=150)
+        plt.close(fig)
+
+        visual_rows.append(
+            {
+                "item_idx": i,
+                "debug_name": debug_name,
+                "text": title_text,
+                "image_id": image_id,
+                "query_id": query_id,
+                "file_name": file_name,
+                "img_root": img_root,
+                "original_path": os.path.join(img_root, file_name) if (img_root is not None and file_name is not None) else None,
+                "gt_fg_ratio": float(gti.mean()),
+                "pred_fg_ratio": float(pbi.mean()),
+                "pred_prob_mean": float(probi.mean()),
+            }
+        )
+
+    with open(save_dir / "visual_summary.json", "w", encoding="utf-8") as f:
+        json.dump(visual_rows, f, ensure_ascii=False, indent=2)
+
+    print(f"[DEBUG] saved first-batch visuals -> {save_dir}")
 
 
 def unwrap_ddp_if_wrapped(model):
@@ -227,13 +792,8 @@ class Trainer:
             f"frozen={n_total - n_trainable}"
         )
 
-        cnt = 0
-        for name, p in self.model.named_parameters():
-            if p.requires_grad:
-                print("[TRAINABLE]", name)
-                cnt += 1
-                if cnt >= 20:
-                    break
+        debug_dir = os.path.join(self.logging_conf.log_dir, "debug_first_batch")
+        dump_trainable_params(self.model, debug_dir)
 
         self._move_to_device()
         self._construct_optimizers()
@@ -528,6 +1088,22 @@ class Trainer:
         find_targets = [
             unwrap_ddp_if_wrapped(model).back_convert(x) for x in batch.find_targets
         ]
+    
+
+        if self.distributed_rank == 0 and self.steps[phase] == 0:
+            debug_dir = os.path.join(self.logging_conf.log_dir, "debug_first_batch")
+            debug_dataset = _get_dataset_for_phase(self, phase)
+            ann_file, img_root = _discover_ann_file_and_img_root(debug_dataset)
+            save_first_batch_visuals(
+                batch,
+                find_stages,
+                find_targets,
+                debug_dir,
+                max_items=8,
+                ann_file=ann_file,
+                img_root=img_root,
+            )
+
         batch_size = len(batch.img_batch)
         loss = self._find_loss(key)(find_stages, find_targets)
 
