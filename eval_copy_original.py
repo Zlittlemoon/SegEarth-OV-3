@@ -67,11 +67,20 @@ def append_experiment_result(file_path, experiment_data):
     last_row = sheet.max_row
 
     for index, result in enumerate(experiment_data, start=1):
+        aAcc = result.get('aAcc', result.get('val/aAcc'))
+        mIoU = result.get('mIoU', result.get('val/mIoU'))
+        mAcc = result.get('mAcc', result.get('val/mAcc'))
+
+        if aAcc is None or mIoU is None or mAcc is None:
+            raise KeyError(
+                f"Metric keys not found in result. Available keys: {list(result.keys())}"
+            )
+
         sheet.cell(row=last_row + index, column=1, value=result['Model'])
         sheet.cell(row=last_row + index, column=2, value=result['Dataset'])
-        sheet.cell(row=last_row + index, column=3, value=result['aAcc'])
-        sheet.cell(row=last_row + index, column=4, value=result['mIoU'])
-        sheet.cell(row=last_row + index, column=5, value=result['mAcc'])
+        sheet.cell(row=last_row + index, column=3, value=aAcc)
+        sheet.cell(row=last_row + index, column=4, value=mIoU)
+        sheet.cell(row=last_row + index, column=5, value=mAcc)
 
     workbook.save(file_path)
 
@@ -122,7 +131,7 @@ def main():
         append_experiment_result('results0.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results0.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')

@@ -40,7 +40,8 @@ class RSPromptSemanticModel(nn.Module):
         self.prompt_tuning_mode = os.environ.get("SAM3_RS_PROMPT_TUNING", "soft").strip().lower()
         self.soft_prompt_len = int(os.environ.get("SAM3_RS_SOFT_PROMPT_LEN", "34"))
         self.prompt_dim = int(os.environ.get("SAM3_RS_PROMPT_DIM", "256"))
-        self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "1") == "1"
+        # Default to additive soft prompt (prompt + soft_prompt) to preserve text conditioning.
+        self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "0") == "1"
 
         if self.prompt_tuning_mode == "soft":
             self.soft_prompt = nn.Parameter(

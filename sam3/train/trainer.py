@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+import copy
 import contextlib
 import fnmatch
 import gc
@@ -137,6 +138,36 @@ def _denorm_img(img):
     img = img * 0.5 + 0.5
     return img.clamp(0.0, 1.0)
 
+
+def _debug_enabled() -> bool:
+    return (
+        os.getenv("SAM3_RS_DEBUG", "0") == "1"
+        or os.getenv("SAM3_RS_DEBUG_PROMPT", "0") == "1"
+    )
+
+
+def _debug_rank0_enabled(rank: Optional[int] = None) -> bool:
+    if not _debug_enabled():
+        return False
+    if rank is None:
+        return True
+    return int(rank) == 0
+
+
+def _debug_print(*args, rank: Optional[int] = None, **kwargs):
+    if _debug_rank0_enabled(rank):
+        print(*args, **kwargs)
+
+
+def _fg_ratio_per_sample(x):
+    x = _to_cpu(x)
+    if not torch.is_tensor(x):
+        x = torch.as_tensor(x)
+    if x.ndim < 2:
+        return x.float()
+    return x.float().flatten(1).mean(1)
+
+
 _DEBUG_JSON_LOOKUP_CACHE = {}
 
 
@@ -226,6 +257,12 @@ def _get_or_build_json_lookup(ann_file: Optional[str]):
     qid_by_first_key = {}
     qid_by_text_img = {}
 
+    query_by_id = {}
+    qmeta_by_first_key = {}
+    qmeta_by_text_img = {}
+    qmeta_by_ann_key = {}
+    qmeta_by_imgcat = {}
+
     for i, q in enumerate(queries):
         ann_ids = _resolve_ann_ids_from_json_query(q)
         if len(ann_ids) == 0:
@@ -245,17 +282,49 @@ def _get_or_build_json_lookup(ann_file: Optional[str]):
         image_id = int(image_id)
 
         first_ann_id = int(ann_ids[0])
+        first_ann = ann_by_id.get(first_ann_id, {})
+        file_name = image_by_id.get(image_id, {}).get("file_name")
+
+        meta = {
+            "query_id": qid,
+            "image_id": image_id,
+            "query_text": query_text,
+            "original_category_id": original_cat_id,
+            "first_ann_id": first_ann_id,
+            "raw_input_box": q.get("input_box"),
+            "raw_input_box_label": q.get("input_box_label"),
+            "raw_input_points": q.get("input_points"),
+            "first_ann_bbox": first_ann.get("bbox"),
+            "file_name": file_name,
+        }
+
+        query_by_id[qid] = meta
+
         key1 = (image_id, query_text, first_ann_id, original_cat_id)
         qid_by_first_key.setdefault(key1, []).append(qid)
+        qmeta_by_first_key.setdefault(key1, []).append(meta)
 
         key2 = (image_id, query_text, original_cat_id)
         qid_by_text_img.setdefault(key2, []).append(qid)
+        qmeta_by_text_img.setdefault(key2, []).append(meta)
+
+        key3 = (image_id, first_ann_id, original_cat_id)
+        qmeta_by_ann_key.setdefault(key3, []).append(meta)
+
+        key4 = (image_id, original_cat_id)
+        qmeta_by_imgcat.setdefault(key4, []).append(meta)
 
     lookup = {
         "ann_file": ann_file,
         "image_by_id": image_by_id,
+        "ann_by_id": ann_by_id,
         "qid_by_first_key": qid_by_first_key,
         "qid_by_text_img": qid_by_text_img,
+        "query_by_id": query_by_id,
+        "qmeta_by_first_key": qmeta_by_first_key,
+        "qmeta_by_text_img": qmeta_by_text_img,
+        "qmeta_by_ann_key": qmeta_by_ann_key,
+        "qmeta_by_imgcat": qmeta_by_imgcat,
     }
     _DEBUG_JSON_LOOKUP_CACHE[ann_file] = lookup
     return lookup
@@ -395,26 +464,227 @@ def _try_get_boxes(batch, find_targets):
     if hasattr(batch, "find_inputs") and len(batch.find_inputs) > 0:
         find_input = batch.find_inputs[0]
         if hasattr(find_input, "input_boxes") and torch.is_tensor(find_input.input_boxes):
-            return _to_cpu(find_input.input_boxes), "batch.find_inputs[0].input_boxes"
+            v = _to_cpu(find_input.input_boxes)
+            if v.ndim == 3 and v.shape[0] == 1 and v.shape[-1] == 4:
+                v = v[0]
+            elif v.ndim == 3 and v.shape[1] == 1 and v.shape[-1] == 4:
+                v = v[:, 0]
+            return v, "batch.find_inputs[0].input_boxes"
 
-    # 再兜底 batch 直挂字段
     for attr in ["input_boxes", "find_input_boxes", "prompt_boxes", "boxes"]:
         if hasattr(batch, attr):
             v = getattr(batch, attr)
             if torch.is_tensor(v) and v.ndim >= 2:
-                return _to_cpu(v), f"batch.{attr}"
+                v = _to_cpu(v)
+                if v.ndim == 3 and v.shape[0] == 1 and v.shape[-1] == 4:
+                    v = v[0]
+                elif v.ndim == 3 and v.shape[1] == 1 and v.shape[-1] == 4:
+                    v = v[:, 0]
+                return v, f"batch.{attr}"
 
-    # 最后才 fallback 到 target-side box
     if isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict):
         t0 = find_targets[0]
-        for k in ["boxes", "boxes_xyxy", "boxes_padded"]:
+        for k in ["boxes", "boxes_padded"]:
             if k in t0 and torch.is_tensor(t0[k]):
-                v = t0[k]
-                if v.ndim == 3 and v.shape[1] == 1:
+                v = _to_cpu(t0[k])
+                if v.ndim == 3 and v.shape[1] == 1 and v.shape[-1] == 4:
                     v = v[:, 0]
-                return _to_cpu(v), f"find_targets[0]['{k}']"
+                return v, f"find_targets[0]['{k}']"
 
     return None, None
+
+
+def _try_get_original_sizes(batch):
+    if hasattr(batch, "find_metadatas") and len(batch.find_metadatas) > 0:
+        meta = batch.find_metadatas[0]
+        if isinstance(meta, dict) and "original_size" in meta:
+            return _to_cpu(meta["original_size"])
+        if hasattr(meta, "original_size"):
+            return _to_cpu(meta.original_size)
+    return None
+
+
+def _normalize_box_tensor(boxes):
+    if boxes is None:
+        return None
+    boxes = _to_cpu(boxes)
+    if not torch.is_tensor(boxes):
+        boxes = torch.as_tensor(boxes)
+    if boxes.ndim == 3 and boxes.shape[0] == 1 and boxes.shape[-1] == 4:
+        boxes = boxes[0]
+    elif boxes.ndim == 3 and boxes.shape[1] == 1 and boxes.shape[-1] == 4:
+        boxes = boxes[:, 0]
+    return boxes
+
+
+def _normalize_box_mask(mask):
+    if mask is None:
+        return None
+    mask = _to_cpu(mask)
+    if not torch.is_tensor(mask):
+        mask = torch.as_tensor(mask)
+    if mask.ndim == 2 and mask.shape[1] == 1:
+        mask = mask[:, 0]
+    else:
+        mask = mask.view(-1)
+    return mask
+
+
+def _try_get_prompt_boxes(batch):
+    if hasattr(batch, "find_inputs") and len(batch.find_inputs) > 0:
+        fi = batch.find_inputs[0]
+        if hasattr(fi, "input_boxes") and torch.is_tensor(fi.input_boxes):
+            boxes = _normalize_box_tensor(fi.input_boxes)
+            masks = None
+            if hasattr(fi, "input_boxes_mask") and torch.is_tensor(fi.input_boxes_mask):
+                masks = _normalize_box_mask(fi.input_boxes_mask)
+            return boxes, masks, "batch.find_inputs[0].input_boxes"
+    return None, None, None
+
+
+def _try_get_target_boxes_xywh(find_targets):
+    if isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict):
+        t0 = find_targets[0]
+        if "boxes" in t0 and torch.is_tensor(t0["boxes"]):
+            return _normalize_box_tensor(t0["boxes"]), "find_targets[0]['boxes']"
+        if "boxes_padded" in t0 and torch.is_tensor(t0["boxes_padded"]):
+            return _normalize_box_tensor(t0["boxes_padded"]), "find_targets[0]['boxes_padded']"
+    return None, None
+
+
+def _pick_item_box(boxes, i, masks=None):
+    if boxes is None:
+        return None
+    if not torch.is_tensor(boxes):
+        boxes = torch.as_tensor(boxes)
+    if i >= boxes.shape[0]:
+        return None
+    b = boxes[i]
+    if b.ndim == 1:
+        return b.flatten().tolist()
+    if b.ndim == 2 and b.shape[0] > 0:
+        return b[0].flatten().tolist()
+    return None
+
+
+def _xywh_to_xyxy(box):
+    if box is None:
+        return None
+    x, y, w, h = [float(v) for v in box[:4]]
+    return [x, y, x + w, y + h]
+
+
+def _scale_raw_json_xywh_to_current_image(raw_box, orig_size_hw, cur_h, cur_w):
+    if raw_box is None or orig_size_hw is None:
+        return None
+
+    box = torch.as_tensor(raw_box, dtype=torch.float32).view(-1, 4)[0].tolist()
+    oh, ow = int(orig_size_hw[0]), int(orig_size_hw[1])
+    sx = float(cur_w) / float(ow)
+    sy = float(cur_h) / float(oh)
+
+    x, y, w, h = box
+    return [x * sx, y * sy, (x + w) * sx, (y + h) * sy]
+
+
+def _maybe_scale_norm_xyxy(box_xyxy, h, w):
+    if box_xyxy is None:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in box_xyxy[:4]]
+    if max(abs(x1), abs(y1), abs(x2), abs(y2)) <= 1.5:
+        return [x1 * w, y1 * h, x2 * w, y2 * h]
+    return [x1, y1, x2, y2]
+
+
+def _maybe_scale_norm_xywh(box_xywh, h, w):
+    if box_xywh is None:
+        return None
+    x, y, bw, bh = [float(v) for v in box_xywh[:4]]
+    if max(abs(x), abs(y), abs(bw), abs(bh)) <= 1.5:
+        x *= w
+        y *= h
+        bw *= w
+        bh *= h
+    return [x, y, x + bw, y + bh]
+
+
+def _draw_xyxy(ax, box_xyxy, color, label, linestyle="-", linewidth=2):
+    if box_xyxy is None:
+        return
+    x1, y1, x2, y2 = [float(v) for v in box_xyxy[:4]]
+    w = max(0.0, x2 - x1)
+    h = max(0.0, y2 - y1)
+
+    import matplotlib.patches as patches
+    rect = patches.Rectangle(
+        (x1, y1),
+        w,
+        h,
+        linewidth=linewidth,
+        edgecolor=color,
+        facecolor="none",
+        linestyle=linestyle,
+        label=label,
+    )
+    ax.add_patch(rect)
+
+
+def _resolve_query_meta(i, text, image_ids, object_ids, original_cat_ids, json_lookup):
+    identity = _resolve_debug_identity(
+        i=i,
+        text=text,
+        image_ids=image_ids,
+        object_ids=object_ids,
+        original_cat_ids=original_cat_ids,
+        json_lookup=json_lookup,
+    )
+
+    meta = None
+    if json_lookup is not None and identity.get("query_id") is not None:
+        meta = json_lookup["query_by_id"].get(int(identity["query_id"]))
+
+    image_id = identity.get("image_id")
+    object_id = identity.get("object_id")
+    original_cat_id = identity.get("original_category_id", -1)
+
+    if meta is None and json_lookup is not None and image_id is not None and object_id is not None:
+        if text is not None and text != "<text not found in batch>":
+            cands = json_lookup["qmeta_by_first_key"].get(
+                (int(image_id), str(text), int(object_id), int(original_cat_id)), []
+            )
+            if len(cands) == 1:
+                meta = cands[0]
+
+        if meta is None:
+            cands = json_lookup["qmeta_by_ann_key"].get(
+                (int(image_id), int(object_id), int(original_cat_id)), []
+            )
+            if len(cands) == 1:
+                meta = cands[0]
+
+    if meta is None and json_lookup is not None and image_id is not None:
+        if text is not None and text != "<text not found in batch>":
+            cands = json_lookup["qmeta_by_text_img"].get(
+                (int(image_id), str(text), int(original_cat_id)), []
+            )
+            if len(cands) == 1:
+                meta = cands[0]
+
+        if meta is None:
+            cands = json_lookup["qmeta_by_imgcat"].get(
+                (int(image_id), int(original_cat_id)), []
+            )
+            if len(cands) == 1:
+                meta = cands[0]
+
+    if meta is None:
+        meta = {}
+
+    out = dict(identity)
+    out["raw_input_box"] = meta.get("raw_input_box")
+    out["first_ann_bbox"] = meta.get("first_ann_bbox")
+    return out
+
 
 def dump_trainable_params(model, save_dir):
     save_dir = Path(save_dir)
@@ -467,7 +737,6 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) 把 batch 的结构先完整存一下，便于你确认 text / input_bbox 到底在哪
     batch_summary = {
         "batch_type": str(type(batch)),
         "batch_summary": _summarize_obj(batch, depth=2),
@@ -485,11 +754,11 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
     if "semantic_seg" not in out:
         raise KeyError(f"semantic_seg not found, stage keys={list(out.keys())}")
 
-    pred = _to_cpu(out["semantic_seg"]).float()  # [B,1,h,w]
+    pred = _to_cpu(out["semantic_seg"]).float()
 
     if not hasattr(batch, "img_batch"):
         raise AttributeError("batch has no img_batch; please inspect batch_structure.json")
-    imgs = _to_cpu(batch.img_batch)  # [B,3,H,W]
+    imgs = _to_cpu(batch.img_batch)
 
     if not (isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict)):
         raise TypeError("find_targets format unexpected; please inspect batch_structure.json")
@@ -504,10 +773,50 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
 
     pred_up = F.interpolate(pred, size=gt.shape[-2:], mode="bilinear", align_corners=False)
     prob_up = pred_up.sigmoid()
-    pred_bin = (prob_up > 0.5).squeeze(1)  # [B,H,W]
+    pred_bin = (prob_up > 0.5).squeeze(1)
 
     texts = _try_get_texts(batch)
-    boxes, box_source = _try_get_boxes(batch, find_targets)
+
+    prompt_boxes, prompt_box_masks, prompt_box_source = _try_get_prompt_boxes(batch)
+    target_boxes_xywh, target_box_source = _try_get_target_boxes_xywh(find_targets)
+    legacy_boxes, legacy_box_source = _try_get_boxes(batch, find_targets)
+    original_sizes = _try_get_original_sizes(batch)
+
+    runtime_dump = {
+        "trainer_file": __file__,
+        "ann_file": ann_file,
+        "img_root": img_root,
+        "texts_from_helper": texts,
+        "prompt_box_source": prompt_box_source,
+        "target_box_source": target_box_source,
+        "legacy_box_source": legacy_box_source,
+    }
+
+    if hasattr(batch, "find_text_batch"):
+        runtime_dump["find_text_batch"] = list(batch.find_text_batch)
+
+    if hasattr(batch, "find_inputs") and len(batch.find_inputs) > 0:
+        fi = batch.find_inputs[0]
+
+        if hasattr(fi, "text_ids") and torch.is_tensor(fi.text_ids):
+            runtime_dump["text_ids_shape"] = list(fi.text_ids.shape)
+            runtime_dump["text_ids_head"] = _to_cpu(fi.text_ids).view(-1)[:32].tolist()
+
+        if hasattr(fi, "input_boxes") and torch.is_tensor(fi.input_boxes):
+            runtime_dump["input_boxes_shape"] = list(_to_cpu(fi.input_boxes).shape)
+            runtime_dump["input_boxes_head"] = _to_cpu(fi.input_boxes)[:4].tolist()
+
+        if hasattr(fi, "input_boxes_mask") and torch.is_tensor(fi.input_boxes_mask):
+            runtime_dump["input_boxes_mask_shape"] = list(_to_cpu(fi.input_boxes_mask).shape)
+            runtime_dump["input_boxes_mask_head"] = _to_cpu(fi.input_boxes_mask)[:4].tolist()
+
+    runtime_dump["normalized_prompt_boxes_shape"] = None if prompt_boxes is None else list(prompt_boxes.shape)
+    runtime_dump["normalized_prompt_boxes_head"] = None if prompt_boxes is None else prompt_boxes[:4].tolist()
+    runtime_dump["normalized_target_boxes_shape"] = None if target_boxes_xywh is None else list(target_boxes_xywh.shape)
+    runtime_dump["normalized_target_boxes_head"] = None if target_boxes_xywh is None else target_boxes_xywh[:4].tolist()
+
+    with open(save_dir / "runtime_prompt_dump.json", "w", encoding="utf-8") as f:
+        json.dump(runtime_dump, f, ensure_ascii=False, indent=2)
 
     B = min(int(imgs.shape[0]), int(gt.shape[0]), int(pred_bin.shape[0]), max_items)
 
@@ -520,7 +829,9 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
                 "pred_up": _tensor_brief(pred_up),
                 "pred_bin": _tensor_brief(pred_bin),
                 "texts_found": texts is not None,
-                "box_source": box_source,
+                "prompt_box_source": prompt_box_source,
+                "target_box_source": target_box_source,
+                "legacy_box_source": legacy_box_source,
                 "ann_file": ann_file,
                 "img_root": img_root,
             },
@@ -538,7 +849,7 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
         probi = prob_up[i, 0].numpy()
 
         title_text = texts[i] if texts is not None and i < len(texts) else "<text not found in batch>"
-        identity = _resolve_debug_identity(
+        meta = _resolve_query_meta(
             i=i,
             text=title_text,
             image_ids=image_ids,
@@ -547,15 +858,15 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
             json_lookup=json_lookup,
         )
 
-        image_id = identity["image_id"]
-        query_id = identity["query_id"]
-        file_name = identity["file_name"]
+        image_id = meta["image_id"]
+        query_id = meta["query_id"]
+        file_name = meta["file_name"]
 
         img_id_str = str(image_id) if image_id is not None else "UNK"
         qid_str = str(query_id) if query_id is not None else "UNK"
         debug_name = f"{i:04d}_{_slugify(title_text)}_img{img_id_str}_q{qid_str}.png"
 
-        fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
         axes[0].imshow(img)
         title_lines = [
@@ -564,39 +875,75 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
         ]
         if file_name is not None:
             title_lines.append(f"file={file_name}")
-        axes[0].set_title("".join(title_lines))
+        axes[0].set_title("\n".join(title_lines))
         axes[0].axis("off")
 
         axes[1].imshow(img)
         axes[1].imshow(gti, alpha=0.45)
-        axes[1].set_title(f"GT maskfg_ratio={gti.mean():.4f}")
+        axes[1].set_title(f"GT mask fg_ratio={gti.mean():.4f}")
         axes[1].axis("off")
 
         axes[2].imshow(img)
         axes[2].imshow(pbi, alpha=0.45)
-        axes[2].set_title(f"Pred bin@0.5fg_ratio={pbi.mean():.4f}")
+        axes[2].set_title(f"Pred bin@0.5 fg_ratio={pbi.mean():.4f}")
         axes[2].axis("off")
 
         axes[3].imshow(probi, cmap="viridis")
         axes[3].set_title(f"Pred prob upsampled mean={probi.mean():.4f}")
         axes[3].axis("off")
 
-        if boxes is not None and i < len(boxes):
-            box = boxes[i]
-            if torch.is_tensor(box):
-                box = box.flatten().tolist()
-            if len(box) == 4:
-                x1, y1, a, b = box
-                if box_source and "xyxy" in box_source:
-                    x2, y2 = a, b
-                    w = max(0.0, x2 - x1)
-                    h = max(0.0, y2 - y1)
-                else:
-                    w = a
-                    h = b
-                import matplotlib.patches as patches
-                rect = patches.Rectangle((x1, y1), w, h, linewidth=2, edgecolor="red", facecolor="none")
-                axes[0].add_patch(rect)
+        cur_h, cur_w = img.shape[0], img.shape[1]
+
+        prompt_box_raw = _pick_item_box(prompt_boxes, i, prompt_box_masks)
+        prompt_box_xyxy = _maybe_scale_norm_xywh(prompt_box_raw, cur_h, cur_w)
+
+        target_box_raw = _pick_item_box(target_boxes_xywh, i, None)
+        target_box_xyxy = _maybe_scale_norm_xywh(target_box_raw, cur_h, cur_w)
+
+        orig_size_hw = None
+        if original_sizes is not None and i < len(original_sizes):
+            osz = original_sizes[i]
+            if torch.is_tensor(osz):
+                osz = osz.flatten().tolist()
+            if len(osz) >= 2:
+                orig_size_hw = (osz[0], osz[1])
+
+        json_raw_input_box = meta.get("raw_input_box")
+        json_box_xyxy = _scale_raw_json_xywh_to_current_image(
+            json_raw_input_box,
+            orig_size_hw,
+            cur_h,
+            cur_w,
+        )
+
+        fallback_ann_bbox = meta.get("first_ann_bbox")
+        fallback_ann_xyxy = _scale_raw_json_xywh_to_current_image(
+            fallback_ann_bbox,
+            orig_size_hw,
+            cur_h,
+            cur_w,
+        )
+
+        _draw_xyxy(axes[0], prompt_box_xyxy, color="lime", label="prompt_box(batch)", linestyle="-", linewidth=2)
+        _draw_xyxy(axes[0], target_box_xyxy, color="red", label="target_box(find_targets)", linestyle="-", linewidth=2)
+        _draw_xyxy(axes[0], json_box_xyxy, color="cyan", label="json_input_box(raw->scaled)", linestyle="--", linewidth=2)
+
+        if json_raw_input_box is None:
+            _draw_xyxy(axes[0], fallback_ann_xyxy, color="yellow", label="ann_bbox_fallback", linestyle="--", linewidth=2)
+
+        handles, labels = axes[0].get_legend_handles_labels()
+        if len(handles) > 0:
+            uniq = {}
+            for h, l in zip(handles, labels):
+                if l not in uniq:
+                    uniq[l] = h
+            axes[0].legend(
+                uniq.values(),
+                uniq.keys(),
+                loc="lower left",
+                fontsize=8,
+                framealpha=0.8,
+            )
 
         fig.tight_layout()
         fig.savefig(save_dir / debug_name, dpi=150)
@@ -612,6 +959,16 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
                 "file_name": file_name,
                 "img_root": img_root,
                 "original_path": os.path.join(img_root, file_name) if (img_root is not None and file_name is not None) else None,
+                "prompt_box_source": prompt_box_source,
+                "target_box_source": target_box_source,
+                "prompt_box_raw": prompt_box_raw,
+                "prompt_box_xyxy": prompt_box_xyxy,
+                "target_box_raw": target_box_raw,
+                "target_box_xyxy": target_box_xyxy,
+                "json_raw_input_box": json_raw_input_box,
+                "json_input_box_xyxy": json_box_xyxy,
+                "json_first_ann_bbox": fallback_ann_bbox,
+                "json_first_ann_bbox_xyxy": fallback_ann_xyxy,
                 "gt_fg_ratio": float(gti.mean()),
                 "pred_fg_ratio": float(pbi.mean()),
                 "pred_prob_mean": float(probi.mean()),
@@ -708,6 +1065,55 @@ class LoggingConf:
     wandb_writer: Optional[Any] = None
 
 
+
+
+def _is_soft_prompt_param(name: str) -> bool:
+    return name == "soft_prompt"
+
+
+def _is_text_prompt_param(name: str) -> bool:
+    if name == "sam3.backbone.language_backbone.encoder.text_projection":
+        return True
+    if ".ca_text." in name:
+        return True
+    if ".catext_norm." in name:
+        return True
+    return False
+
+
+def _set_lr_in_scheduler_cfg(scheduler_cfg: Dict[str, Any], lr_value: float) -> Dict[str, Any]:
+    cfg = copy.deepcopy(scheduler_cfg)
+    if "scheduler" not in cfg or cfg["scheduler"] is None:
+        cfg["value"] = float(lr_value)
+        return cfg
+    sch = cfg["scheduler"]
+    if isinstance(sch, Mapping):
+        if "base_lr" in sch:
+            sch["base_lr"] = float(lr_value)
+        elif "value" in sch:
+            sch["value"] = float(lr_value)
+        else:
+            raise KeyError(f"Cannot set lr for scheduler config without 'base_lr' or 'value'. keys={list(sch.keys())}")
+    else:
+        raise TypeError(f"Unsupported scheduler config type: {type(sch)}")
+    return cfg
+
+
+def _collect_trainable_param_names_for_text_only(model: torch.nn.Module):
+    soft_names = []
+    text_names = []
+    unexpected_names = []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if _is_soft_prompt_param(name):
+            soft_names.append(name)
+        elif _is_text_prompt_param(name):
+            text_names.append(name)
+        else:
+            unexpected_names.append(name)
+    return soft_names, text_names, unexpected_names
+
 class Trainer:
     """
     Trainer supporting the DDP training strategies.
@@ -760,6 +1166,7 @@ class Trainer:
         self.skip_first_val = skip_first_val
         self.skip_saving_ckpts = skip_saving_ckpts
         self.empty_gpu_mem_cache_after_eval = empty_gpu_mem_cache_after_eval
+        self.force_debug_visual_once = os.getenv("SAM3_DEBUG_FORCE_FIRST_BATCH", "0") == "1"
 
         self._infer_distributed_backend_if_none(distributed, accelerator)
 
@@ -1088,10 +1495,55 @@ class Trainer:
         find_targets = [
             unwrap_ddp_if_wrapped(model).back_convert(x) for x in batch.find_targets
         ]
-    
 
-        if self.distributed_rank == 0 and self.steps[phase] == 0:
-            debug_dir = os.path.join(self.logging_conf.log_dir, "debug_first_batch")
+        texts = _try_get_texts(batch)
+        img_ids = _try_get_original_image_ids(batch)
+        cat_ids = _try_get_original_category_ids(batch)
+
+        if _debug_rank0_enabled(self.distributed_rank) and self.steps[phase] < 5:
+            t0 = find_targets[0]
+            raw_sem = t0["semantic_masks"] if "semantic_masks" in t0 else t0["masks"]
+            raw_sem = raw_sem.float()
+
+            _debug_print("[DEBUG][_step][RAW TARGET BEFORE LOSS]", rank=self.distributed_rank)
+            _debug_print(
+                f"[DEBUG] phase={phase} epoch={int(self.epoch)} step={int(self.steps[phase])}",
+                rank=self.distributed_rank,
+            )
+            _debug_print("[DEBUG] raw_sem shape =", tuple(raw_sem.shape), rank=self.distributed_rank)
+            _debug_print("[DEBUG] raw_sem batch_fg_ratio =", raw_sem.mean().item(), rank=self.distributed_rank)
+            _debug_print(
+                "[DEBUG] raw_sem per_sample_fg_ratio[:8] =",
+                _fg_ratio_per_sample(raw_sem)[:8].tolist(),
+                rank=self.distributed_rank,
+            )
+            if "masks" in t0:
+                m = t0["masks"].float()
+                _debug_print("[DEBUG] raw masks batch_fg_ratio =", m.mean().item(), rank=self.distributed_rank)
+                _debug_print(
+                    "[DEBUG] raw masks per_sample_fg_ratio[:8] =",
+                    _fg_ratio_per_sample(m)[:8].tolist(),
+                    rank=self.distributed_rank,
+                )
+            if "num_boxes" in t0 and torch.is_tensor(t0["num_boxes"]):
+                _debug_print(
+                    "[DEBUG] raw num_boxes[:8] =",
+                    _to_cpu(t0["num_boxes"]).view(-1)[:8].tolist(),
+                    rank=self.distributed_rank,
+                )
+            if img_ids is not None:
+                _debug_print("[DEBUG] image_ids[:8] =", img_ids[:8].tolist(), rank=self.distributed_rank)
+            if cat_ids is not None:
+                _debug_print("[DEBUG] category_ids[:8] =", cat_ids[:8].tolist(), rank=self.distributed_rank)
+
+        need_debug_dump = (
+            self.distributed_rank == 0
+            and (self.steps[phase] == 0 or self.force_debug_visual_once)
+        )
+
+        if need_debug_dump:
+            debug_tag = f"{phase.lower()}_epoch{int(self.epoch):03d}_step{int(self.steps[phase]):06d}"
+            debug_dir = os.path.join(self.logging_conf.log_dir, "debug_first_batch", debug_tag)
             debug_dataset = _get_dataset_for_phase(self, phase)
             ann_file, img_root = _discover_ann_file_and_img_root(debug_dataset)
             save_first_batch_visuals(
@@ -1103,9 +1555,20 @@ class Trainer:
                 ann_file=ann_file,
                 img_root=img_root,
             )
+            self.force_debug_visual_once = False
 
         batch_size = len(batch.img_batch)
-        loss = self._find_loss(key)(find_stages, find_targets)
+        loss_obj = self._find_loss(key)
+        if hasattr(loss_obj, "__dict__"):
+            loss_obj._debug_context = {
+                "phase": phase,
+                "epoch": int(self.epoch),
+                "step": int(self.steps[phase]),
+                "texts": texts[:8] if texts is not None else None,
+                "image_ids": img_ids[:8].tolist() if img_ids is not None else None,
+                "category_ids": cat_ids[:8].tolist() if cat_ids is not None else None,
+            }
+        loss = loss_obj(find_stages, find_targets)
 
         loss_str = f"Losses/{phase}_{key}_loss"
 
@@ -1415,6 +1878,14 @@ class Trainer:
             #     self.device, non_blocking=True
             # )  # move tensors in a tensorclass
 
+            batch_for_eval = None
+            if self.distributed_rank == 0 and _debug_enabled() and int(self.steps[phase]) < 5:
+                try:
+                    batch_for_eval = copy.deepcopy(batch)
+                except Exception as e:
+                    print(f"[DEBUG][post-step eval] deepcopy failed: {e}")
+                    batch_for_eval = None
+
             try:
                 self._run_step(batch, phase, loss_mts, extra_loss_mts)
 
@@ -1460,6 +1931,13 @@ class Trainer:
                 # applied if the gradients are infinite
                 self.scaler.step(self.optim.optimizer)
                 self.scaler.update()
+
+                self._debug_post_step_eval_rerun(
+                    batch=batch_for_eval if batch_for_eval is not None else batch,
+                    phase=phase,
+                    step_idx=max(int(self.steps[phase]) - 1, 0),
+                    max_debug_steps=5,
+                )
 
                 # measure elapsed time
                 batch_time_meter.update(time.time() - end)
@@ -1579,6 +2057,137 @@ class Trainer:
                         )
                     extra_loss_mts[extra_loss_key].update(extra_loss.item(), batch_size)
 
+    def _debug_post_step_eval_rerun(
+        self,
+        batch,
+        phase: str,
+        step_idx: int,
+        max_debug_steps: int = 5,
+    ):
+        if self.distributed_rank != 0:
+            return
+        if phase != Phase.TRAIN:
+            return
+        if step_idx >= max_debug_steps:
+            return
+        if not _debug_enabled():
+            return
+        if batch is None:
+            print("[DEBUG][post-step eval] skip because batch is None")
+            return
+
+        if isinstance(batch, list):
+            if len(batch) == 0:
+                print("[DEBUG][post-step eval] skip empty batch list")
+                return
+            batch = batch[0]
+
+        raw_batch = None
+        if isinstance(batch, dict):
+            if len(batch) == 0:
+                print("[DEBUG][post-step eval] skip dict with unexpected len=0")
+                return
+            if len(batch) == 1:
+                _, raw_batch = next(iter(batch.items()))
+            elif "img_batch" in batch and "find_targets" in batch:
+                raw_batch = batch
+            else:
+                print(f"[DEBUG][post-step eval] skip dict with unexpected len={len(batch)}")
+                return
+        elif hasattr(batch, "img_batch") and hasattr(batch, "find_targets"):
+            raw_batch = batch
+        else:
+            print(f"[DEBUG][post-step eval] skip unsupported batch type: {type(batch)}")
+            return
+
+        texts = _try_get_texts(raw_batch)
+        img_ids = _try_get_original_image_ids(raw_batch)
+        cat_ids = _try_get_original_category_ids(raw_batch)
+
+        model = self.model
+        prev_mode = model.training
+        model.eval()
+
+        try:
+            with torch.no_grad():
+                device_type = self.device.type if hasattr(self.device, "type") else "cuda"
+                with torch.amp.autocast(
+                    device_type=device_type,
+                    enabled=self.optim_conf.amp.enabled,
+                    dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
+                ):
+                    eval_batch = copy_data_to_device(raw_batch, self.device, non_blocking=True)
+
+                    eval_find_stages = model(eval_batch)
+                    eval_find_targets = [
+                        unwrap_ddp_if_wrapped(model).back_convert(x)
+                        for x in eval_batch.find_targets
+                    ]
+
+                    eval_out = _unwrap_stage_output(eval_find_stages)
+                    if "semantic_seg" not in eval_out:
+                        print("[DEBUG][post-step eval] semantic_seg not found")
+                        return
+
+                    pred = eval_out["semantic_seg"].float()
+                    pred_prob_288 = pred.sigmoid()
+                    pred_bin_288 = pred_prob_288 > 0.5
+
+                    t0 = eval_find_targets[0]
+                    semantic_targets_1008 = (
+                        t0["semantic_masks"] if "semantic_masks" in t0 else t0["masks"]
+                    ).bool()
+
+                    pred_up_1008 = F.interpolate(
+                        pred,
+                        size=semantic_targets_1008.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    pred_prob_1008 = pred_up_1008.sigmoid()
+                    pred_bin_1008 = pred_prob_1008 > 0.5
+
+                    semantic_targets_288 = (
+                        F.interpolate(
+                            semantic_targets_1008.float().unsqueeze(1),
+                            size=pred.shape[-2:],
+                            mode="nearest",
+                        )
+                        .squeeze(1)
+                        .bool()
+                    )
+
+                    inter_288 = (pred_bin_288[:, 0] & semantic_targets_288).flatten(1).sum(1).float()
+                    union_288 = (pred_bin_288[:, 0] | semantic_targets_288).flatten(1).sum(1).float()
+                    miou_288 = (inter_288 / torch.clamp(union_288, min=1.0)).mean()
+
+                    inter_1008 = (pred_bin_1008[:, 0] & semantic_targets_1008).flatten(1).sum(1).float()
+                    union_1008 = (pred_bin_1008[:, 0] | semantic_targets_1008).flatten(1).sum(1).float()
+                    miou_1008 = (inter_1008 / torch.clamp(union_1008, min=1.0)).mean()
+
+                    print("[DEBUG][post-step eval rerun]")
+                    print(f"[DEBUG] phase={phase} epoch={int(self.epoch)} step={int(step_idx)}")
+                    if texts is not None:
+                        print("[DEBUG] texts[:8] =", texts[:8])
+                    if img_ids is not None:
+                        print("[DEBUG] image_ids[:8] =", img_ids[:8].tolist())
+                    if cat_ids is not None:
+                        print("[DEBUG] category_ids[:8] =", cat_ids[:8].tolist())
+                    print(
+                        f"[DEBUG] pred_288 prob_mean={pred_prob_288.mean().item():.6f} "
+                        f"pred_fg@0.5={pred_bin_288.float().mean().item():.6f} "
+                        f"target_fg={semantic_targets_288.float().mean().item():.6f} "
+                        f"miou_288={miou_288.item():.6f}"
+                    )
+                    print(
+                        f"[DEBUG] pred_1008 prob_mean={pred_prob_1008.mean().item():.6f} "
+                        f"pred_fg@0.5={pred_bin_1008.float().mean().item():.6f} "
+                        f"target_fg={semantic_targets_1008.float().mean().item():.6f} "
+                        f"miou_1008={miou_1008.item():.6f}"
+                    )
+        finally:
+            model.train(prev_mode)
+
     def _log_meters_and_save_best_ckpts(self, phases: List[str]):
         logging.info("Synchronizing meters")
         out_dict = {}
@@ -1684,6 +2293,84 @@ class Trainer:
 
         self.model = instantiate(self.model_conf, _convert_="all")
         maybe_apply_remote_sensing_freeze(self.model)
+
+        def _minimal_unfreeze_for_rs(model, preset: str = None):
+            if preset is None:
+                preset = os.getenv("SAM3_TEXT_UNFREEZE_PRESET", "text_last1")
+
+            for _, p in model.named_parameters():
+                p.requires_grad = False
+
+            exact_names = {"soft_prompt"}
+            text_proj_name = "sam3.backbone.language_backbone.encoder.text_projection"
+
+            layer_prefixes = {
+                "l0": (
+                    "sam3.transformer.decoder.layers.0.ca_text.",
+                    "sam3.transformer.decoder.layers.0.catext_norm.",
+                ),
+                "l1": (
+                    "sam3.transformer.decoder.layers.1.ca_text.",
+                    "sam3.transformer.decoder.layers.1.catext_norm.",
+                ),
+                "l2": (
+                    "sam3.transformer.decoder.layers.2.ca_text.",
+                    "sam3.transformer.decoder.layers.2.catext_norm.",
+                ),
+                "l3": (
+                    "sam3.transformer.decoder.layers.3.ca_text.",
+                    "sam3.transformer.decoder.layers.3.catext_norm.",
+                ),
+                "l4": (
+                    "sam3.transformer.decoder.layers.4.ca_text.",
+                    "sam3.transformer.decoder.layers.4.catext_norm.",
+                ),
+                "l5": (
+                    "sam3.transformer.decoder.layers.5.ca_text.",
+                    "sam3.transformer.decoder.layers.5.catext_norm.",
+                ),
+            }
+
+            prefixes = ()
+            if preset == "soft_only":
+                exact_names = {"soft_prompt"}
+            elif preset == "text_proj_only":
+                exact_names = {"soft_prompt", text_proj_name}
+            elif preset == "text_last1":
+                exact_names = {"soft_prompt", text_proj_name}
+                prefixes = layer_prefixes["l5"]
+            elif preset == "text_last2":
+                exact_names = {"soft_prompt", text_proj_name}
+                prefixes = layer_prefixes["l4"] + layer_prefixes["l5"]
+            elif preset == "text_all6":
+                exact_names = {"soft_prompt", text_proj_name}
+                prefixes = (
+                    layer_prefixes["l0"]
+                    + layer_prefixes["l1"]
+                    + layer_prefixes["l2"]
+                    + layer_prefixes["l3"]
+                    + layer_prefixes["l4"]
+                    + layer_prefixes["l5"]
+                )
+            else:
+                raise ValueError(f"Unknown preset: {preset}")
+
+            changed = []
+            trainable_numel = 0
+            for name, p in model.named_parameters():
+                keep = (name in exact_names) or any(name.startswith(pr) for pr in prefixes)
+                if keep:
+                    p.requires_grad = True
+                    changed.append(name)
+                    trainable_numel += p.numel()
+
+            print(f"[TEXT-ONLY UNFREEZE] preset={preset}")
+            print(f"[TEXT-ONLY UNFREEZE] num_params={trainable_numel}")
+            print(f"[TEXT-ONLY UNFREEZE] num_tensors={len(changed)}")
+            for n in changed:
+                print("   ", n)
+
+        _minimal_unfreeze_for_rs(self.model)
         print_model_summary(self.model)
 
         self.loss = None
@@ -1714,11 +2401,53 @@ class Trainer:
         logging.info("Finished setting up components: Model, loss, optim, meters etc.")
 
     def _construct_optimizers(self):
+        # Safer default for soft-prompt tuning to reduce prompt drift / over-activation.
+        soft_lr = float(os.getenv("SAM3_SOFT_PROMPT_LR", "5e-5"))
+        text_lr = float(os.getenv("SAM3_TEXT_LR", "1e-5"))
+
+        if self.optim_conf.options is None:
+            raise ValueError("self.optim_conf.options is None; cannot build optimizer param groups.")
+
+        options_conf = copy.deepcopy(self.optim_conf.options)
+        if "lr" not in options_conf or options_conf["lr"] is None or len(options_conf["lr"]) == 0:
+            raise KeyError("Optimizer options must contain a non-empty 'lr' config list.")
+
+        base_lr_cfg = copy.deepcopy(options_conf["lr"][0])
+        soft_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, soft_lr)
+        text_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, text_lr)
+
+        soft_lr_cfg["param_names"] = ["soft_prompt"]
+        text_lr_cfg["param_names"] = [
+            "sam3.backbone.language_backbone.encoder.text_projection",
+            "sam3.transformer.decoder.layers.*.ca_text.*",
+            "sam3.transformer.decoder.layers.*.catext_norm.*",
+        ]
+
+        options_conf["lr"] = [soft_lr_cfg, text_lr_cfg]
+
+        soft_names, text_names, unexpected_names = _collect_trainable_param_names_for_text_only(self.model)
+        if len(soft_names) == 0:
+            raise RuntimeError("No trainable 'soft_prompt' parameter found.")
+        if len(text_names) == 0:
+            logging.warning("[TEXT-ONLY OPTIM] No trainable text-layer params matched; optimizer becomes soft-prompt-only.")
+        if len(unexpected_names) > 0:
+            raise RuntimeError(
+                "[TEXT-ONLY OPTIM] Found trainable params outside soft/text groups:\n"
+                + "\n".join(unexpected_names[:200])
+            )
+
+        param_allowlist = set(soft_names) | set(text_names)
+        logging.info("[TEXT-ONLY OPTIM] soft_prompt lr = %.8f", soft_lr)
+        logging.info("[TEXT-ONLY OPTIM] text-layer  lr = %.8f", text_lr)
+        logging.info("[TEXT-ONLY OPTIM] #soft tensors = %d", len(soft_names))
+        logging.info("[TEXT-ONLY OPTIM] #text tensors = %d", len(text_names))
+
         self.optim = construct_optimizer(
             self.model,
             self.optim_conf.optimizer,
-            self.optim_conf.options,
+            options_conf,
             self.optim_conf.param_group_modifiers,
+            param_allowlist=param_allowlist,
         )
 
     def _log_loss_detailed_and_return_core_loss(self, loss, loss_str, step):

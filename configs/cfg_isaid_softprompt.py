@@ -1,12 +1,15 @@
-_base_ = './base_config.py'
+_base_ = './base_config_softprompt.py'
 
 # model settings
 model = dict(
     classname_path='./configs/cls_iSAID.txt',
     prob_thd=0.5,
     confidence_threshold=0.4,
-    # slide_stride=512,
-    # slide_crop=512,
+    slide_stride=512,
+    slide_crop=512,
+    # Optional override (already set in base_config_softprompt.py)
+    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_1xA6000_test/checkpoints/checkpoint_10.pt',
+    use_soft_prompt=True,
 )
 
 # dataset settings

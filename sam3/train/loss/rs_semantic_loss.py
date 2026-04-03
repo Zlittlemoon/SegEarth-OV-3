@@ -1,9 +1,11 @@
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from sam3.model.model_misc import SAM3Output
 
@@ -11,18 +13,6 @@ from sam3.model.model_misc import SAM3Output
 def _align_semantic_targets_to_pred_batch(
     outputs: Dict[str, Any], targets: Dict[str, torch.Tensor]
 ) -> Dict[str, torch.Tensor]:
-    """
-    Make semantic targets batch-aligned with outputs["semantic_seg"].
-
-    Expected final shape:
-      pred:    [B, 1, H, W]
-      targets: [B, H, W] or [B, 1, H, W]
-
-    Handles:
-      1) target is [1, H, W] but pred batch is B>1 -> repeat to B
-      2) target is [N, H, W] with N != B and B==1  -> union to [1, H, W]
-      3) target already aligned                     -> keep as-is
-    """
     if "semantic_seg" not in outputs:
         return targets
 
@@ -34,15 +24,12 @@ def _align_semantic_targets_to_pred_batch(
 
     masks = targets["masks"]
 
-    # [B,1,H,W] -> [B,H,W]
     if masks.ndim == 4 and masks.shape[1] == 1:
         masks = masks[:, 0]
 
-    # single target replicated to multi-image batch
     if masks.ndim == 3 and masks.shape[0] == 1 and pred_bs > 1:
         masks = masks.repeat(pred_bs, 1, 1)
 
-    # mismatch fallback
     if masks.ndim == 3 and masks.shape[0] != pred_bs:
         if pred_bs == 1:
             masks = masks.bool().any(dim=0, keepdim=True).to(masks.dtype)
@@ -53,10 +40,23 @@ def _align_semantic_targets_to_pred_batch(
             )
 
     targets["masks"] = masks
-    if "semantic_masks" in targets:
-        targets["semantic_masks"] = masks
 
-    # SemanticSegCriterion expects num_boxes shape [B]
+    if "semantic_masks" in targets and torch.is_tensor(targets["semantic_masks"]):
+        sm = targets["semantic_masks"]
+        if sm.ndim == 4 and sm.shape[1] == 1:
+            sm = sm[:, 0]
+        if sm.ndim == 3 and sm.shape[0] == 1 and pred_bs > 1:
+            sm = sm.repeat(pred_bs, 1, 1)
+        if sm.ndim == 3 and sm.shape[0] != pred_bs:
+            if pred_bs == 1:
+                sm = sm.bool().any(dim=0, keepdim=True).to(sm.dtype)
+            else:
+                raise RuntimeError(
+                    f"[RSSemanticOnlyLoss] semantic_masks batch mismatch: "
+                    f"pred batch={pred_bs}, semantic_masks shape={tuple(sm.shape)}"
+                )
+        targets["semantic_masks"] = sm
+
     if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
         if targets["num_boxes"].numel() != pred_bs:
             targets["num_boxes"] = torch.ones(
@@ -66,31 +66,79 @@ def _align_semantic_targets_to_pred_batch(
     return targets
 
 
+def _safe_semantic_masks(targets: Dict[str, torch.Tensor]) -> torch.Tensor:
+    if "semantic_masks" in targets and targets["semantic_masks"] is not None:
+        semantic_targets = targets["semantic_masks"]
+    else:
+        semantic_targets = targets["masks"]
+
+    if semantic_targets.ndim == 4 and semantic_targets.shape[1] == 1:
+        semantic_targets = semantic_targets[:, 0]
+
+    if semantic_targets.ndim != 3:
+        raise RuntimeError(
+            f"[RSSemanticOnlyLoss] expected semantic targets [B,H,W], got {tuple(semantic_targets.shape)}"
+        )
+
+    return semantic_targets.bool()
+
+
+def _compute_bin_iou(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tensor:
+    pred_bin = pred_bin.bool()
+    target_bin = target_bin.bool()
+
+    inter = (pred_bin & target_bin).flatten(1).sum(dim=1).float()
+    union = (pred_bin | target_bin).flatten(1).sum(dim=1).float()
+    iou = inter / torch.clamp(union, min=1.0)
+    return iou.mean()
+
+
+def _fg_ratio(x: torch.Tensor) -> float:
+    return x.float().mean().item()
+
+
+def _fg_ratio_per_sample(x: torch.Tensor):
+    return x.float().flatten(1).mean(1)[:8].tolist()
+
+
+def _threshold_tag(th: float) -> str:
+    # 0.3 -> t03, 0.4 -> t04, 0.5 -> t05
+    return f"t{int(round(float(th) * 10)):02d}"
+
+
+def _compute_prob_distribution(prob: torch.Tensor) -> Dict[str, torch.Tensor]:
+    flat = prob.float().reshape(-1)
+    # torch.quantile on full 1008 maps can be expensive; sample deterministically when huge.
+    if flat.numel() > 250000:
+        stride = max(1, flat.numel() // 250000)
+        flat = flat[::stride]
+
+    return {
+        "mean": prob.float().mean(),
+        "std": prob.float().std(unbiased=False),
+        "p10": torch.quantile(flat, 0.10),
+        "p50": torch.quantile(flat, 0.50),
+        "p90": torch.quantile(flat, 0.90),
+    }
+
+
 class RSSemanticOnlyLoss(nn.Module):
-    def __init__(self, loss_fn_semantic_seg: nn.Module, log_prefix: str = "sem") -> None:
+    def __init__(
+        self,
+        loss_fn_semantic_seg: nn.Module,
+        log_prefix: str = "sem",
+        calibration_thresholds: Sequence[float] = (0.3, 0.4, 0.5),
+    ) -> None:
         super().__init__()
         self.loss_fn_semantic_seg = loss_fn_semantic_seg
         self.log_prefix = log_prefix
+        self._debug_print_count = 0
+        self._debug_print_limit = 5
+        self._debug_context = None
+        self.calibration_thresholds = tuple(float(x) for x in calibration_thresholds)
 
     def forward(self, outputs: Any, targets: Any, *args, **kwargs) -> Dict[str, torch.Tensor]:
         return self.compute_loss(outputs, targets)
-    
-    def _dbg_tensor(self, name: str, x: Any) -> None:
-        if not torch.is_tensor(x):
-            print(f"[DEBUG] {name}: type={type(x)}")
-            return
-
-        msg = f"[DEBUG] {name}: shape={tuple(x.shape)} dtype={x.dtype}"
-        if x.numel() > 0:
-            if x.dtype == torch.bool:
-                msg += f" true_ratio={x.float().mean().item():.6f}"
-            else:
-                msg += (
-                    f" min={x.min().item():.6f}"
-                    f" max={x.max().item():.6f}"
-                    f" mean={x.float().mean().item():.6f}"
-                )
-        print(msg)
 
     def _unwrap_outputs(self, outputs: Any) -> Dict[str, Any]:
         if isinstance(outputs, SAM3Output):
@@ -130,193 +178,207 @@ class RSSemanticOnlyLoss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         H, W = output_hw
 
-        def _pick_mask_tensor(t: Dict[str, Any]) -> torch.Tensor:
-            # 优先用 semantic_masks；没有时退回 masks
-            if "semantic_masks" in t:
-                m = t["semantic_masks"]
-            elif "masks" in t:
-                m = t["masks"]
-            else:
-                raise KeyError(
-                    f"Expected one of ['semantic_masks', 'masks'], got keys={list(t.keys())}"
-                )
-
-            if not torch.is_tensor(m):
-                m = torch.as_tensor(m, device=device)
-            else:
-                m = m.to(device)
-
-            return m
-
-        def _empty_semantic() -> Dict[str, torch.Tensor]:
-            masks = torch.zeros((1, H, W), dtype=torch.bool, device=device)
-            num_boxes = torch.zeros((1,), dtype=torch.long, device=device)
-            return {
-                "masks": masks, 
-                "semantic_masks": masks,
-                "num_boxes": num_boxes
-            }
-
-        # ------------------------------------------------------------------
-        # Case 1: targets is already a dict
-        # ------------------------------------------------------------------
         if isinstance(targets, dict):
-            masks = _pick_mask_tensor(targets)
+            out: Dict[str, torch.Tensor] = {}
+
+            masks = targets["masks"]
+            if not torch.is_tensor(masks):
+                masks = torch.as_tensor(masks, device=device)
+            else:
+                masks = masks.to(device)
 
             if masks.numel() == 0:
-                return _empty_semantic()
+                # For all-negative batches, packed instance masks can be empty while
+                # semantic masks still have one map per query. Prefer semantic batch size.
+                if "semantic_masks" in targets and targets["semantic_masks"] is not None:
+                    semantic_masks = targets["semantic_masks"]
+                    if not torch.is_tensor(semantic_masks):
+                        semantic_masks = torch.as_tensor(semantic_masks, device=device)
+                    else:
+                        semantic_masks = semantic_masks.to(device)
+                    if semantic_masks.ndim == 2:
+                        semantic_masks = semantic_masks.unsqueeze(0)
+                    elif semantic_masks.ndim == 4 and semantic_masks.shape[1] == 1:
+                        semantic_masks = semantic_masks[:, 0]
+                    if semantic_masks.ndim != 3:
+                        raise ValueError(
+                            f"Unsupported semantic_masks shape with empty masks: {tuple(semantic_masks.shape)}"
+                        )
+                    semantic_masks = semantic_masks.bool()
+                    out["masks"] = semantic_masks.clone()
+                    out["semantic_masks"] = semantic_masks
+                    out["num_boxes"] = semantic_masks.flatten(1).any(-1).long()
+                else:
+                    masks = torch.zeros((1, H, W), dtype=torch.bool, device=device)
+                    out["masks"] = masks
+                    out["num_boxes"] = torch.zeros((1,), dtype=torch.long, device=device)
+                    out["semantic_masks"] = masks.clone()
+                return out
 
-            # normalize to [B, H, W]
             if masks.ndim == 2:
-                masks = masks.unsqueeze(0)  # [1, H, W]
+                masks = masks.unsqueeze(0)
             elif masks.ndim == 3:
-                # already [B, H, W]
                 pass
             elif masks.ndim == 4 and masks.shape[1] == 1:
-                masks = masks[:, 0]  # [B,1,H,W] -> [B,H,W]
+                masks = masks[:, 0]
             else:
                 raise ValueError(f"Unsupported mask shape in targets dict: {tuple(masks.shape)}")
 
+            out["masks"] = masks.bool()
+
             if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
                 num_boxes = targets["num_boxes"].to(device)
-                if num_boxes.ndim == 0:
-                    num_boxes = num_boxes.unsqueeze(0)
-                if num_boxes.numel() != masks.shape[0]:
-                    num_boxes = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
+                if num_boxes.numel() == masks.shape[0]:
+                    out["num_boxes"] = num_boxes.view(-1).long()
+                else:
+                    out["num_boxes"] = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
             else:
-                num_boxes = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
+                out["num_boxes"] = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
 
-            return {
-                "masks": masks.bool(),
-                "semantic_masks": masks.bool(),
-                "num_boxes": num_boxes.long(),
-            }
+            if "semantic_masks" in targets and targets["semantic_masks"] is not None:
+                semantic_masks = targets["semantic_masks"]
+                if not torch.is_tensor(semantic_masks):
+                    semantic_masks = torch.as_tensor(semantic_masks, device=device)
+                else:
+                    semantic_masks = semantic_masks.to(device)
 
-        # ------------------------------------------------------------------
-        # Case 2: targets is a list
-        # ------------------------------------------------------------------
+                if semantic_masks.ndim == 2:
+                    semantic_masks = semantic_masks.unsqueeze(0)
+                elif semantic_masks.ndim == 3:
+                    pass
+                elif semantic_masks.ndim == 4 and semantic_masks.shape[1] == 1:
+                    semantic_masks = semantic_masks[:, 0]
+                else:
+                    raise ValueError(
+                        f"Unsupported semantic_masks shape in targets dict: {tuple(semantic_masks.shape)}"
+                    )
+
+                if semantic_masks.shape[0] == 1 and masks.shape[0] > 1:
+                    semantic_masks = semantic_masks.repeat(masks.shape[0], 1, 1)
+                elif semantic_masks.shape[0] != masks.shape[0]:
+                    # In semantic-only training (especially with negative/hard-negative queries),
+                    # `masks` can be packed by number of GT objects while `semantic_masks` is
+                    # batched by number of queries. When they mismatch, use semantic masks as the
+                    # canonical batched supervision to avoid dropping valid negative samples.
+                    sem_bs = semantic_masks.shape[0]
+                    out["masks"] = semantic_masks.bool().clone()
+                    out["num_boxes"] = (
+                        semantic_masks.bool().flatten(1).any(-1).long().to(device)
+                    )
+                    if self._debug_print_count < self._debug_print_limit:
+                        print(
+                            "[RSSemanticOnlyLoss][WARN] dict-branch batch mismatch; "
+                            f"using semantic_masks as canonical targets. "
+                            f"masks batch={masks.shape[0]}, semantic_masks batch={sem_bs}"
+                        )
+
+                out["semantic_masks"] = semantic_masks.bool()
+            else:
+                out["semantic_masks"] = out["masks"].clone()
+
+            return out
+
         if not isinstance(targets, list):
             raise TypeError(f"Unsupported targets type: {type(targets)}")
 
         if len(targets) == 0:
             raise ValueError("targets list is empty.")
 
-        # ------------------------------------------------------------------
-        # Special case: current training path passes a list of length 1,
-        # whose first element is ALREADY a batched target dict:
-        #   targets[0]["masks"] or ["semantic_masks"] has shape [B,H,W]
-        # We must KEEP it batched, instead of union-ing along dim 0.
-        # ------------------------------------------------------------------
+        # IMPORTANT:
+        # Trainer can pass `targets` as a singleton list whose first element is already
+        # a batched dict (e.g. masks shape [B,H,W]). Detect that case and delegate to
+        # the dict path instead of collapsing batch dim with any(dim=0).
         if len(targets) == 1 and isinstance(targets[0], dict):
             t0 = targets[0]
-            masks = _pick_mask_tensor(t0)
+            if "masks" in t0:
+                m0 = t0["masks"]
+                nb0 = t0.get("num_boxes", None)
+                if torch.is_tensor(m0):
+                    if (m0.ndim == 3 and torch.is_tensor(nb0) and nb0.numel() > 1) or (
+                        m0.ndim == 4 and m0.shape[0] > 1
+                    ):
+                        return self._collate_targets(t0, device, output_hw)
 
-            if masks.numel() == 0:
-                return _empty_semantic()
-
-            # already batched semantic masks
-            if masks.ndim == 3:
-                # [B, H, W]
-                num_boxes = t0.get("num_boxes", None)
-                if torch.is_tensor(num_boxes):
-                    num_boxes = num_boxes.to(device)
-                    if num_boxes.ndim == 0:
-                        num_boxes = num_boxes.unsqueeze(0)
-
-                    # 关键判断：
-                    # 如果 num_boxes 的长度和 masks 第一维相同，
-                    # 说明 masks 的第一维是 batch 维，不是 instance 维
-                    if num_boxes.numel() == masks.shape[0]:
-                        return {
-                            "masks": masks.bool(),
-                            "semantic_masks": masks.bool(),
-                            "num_boxes": num_boxes.long(),
-                        }
-
-                # 没有可靠 num_boxes 时，也优先按 batched masks 处理
-                return {
-                    "masks": masks.bool(),
-                    "semantic_masks": masks.bool(),
-                    "num_boxes": torch.ones((masks.shape[0],), dtype=torch.long, device=device),
-                }
-
-            if masks.ndim == 4 and masks.shape[1] == 1:
-                # [B,1,H,W] -> [B,H,W]
-                masks = masks[:, 0]
-                num_boxes = t0.get("num_boxes", None)
-                if torch.is_tensor(num_boxes):
-                    num_boxes = num_boxes.to(device)
-                    if num_boxes.ndim == 0:
-                        num_boxes = num_boxes.unsqueeze(0)
-                    if num_boxes.numel() != masks.shape[0]:
-                        num_boxes = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
-                else:
-                    num_boxes = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
-
-                return {
-                    "masks": masks.bool(),
-                    "semantic_masks": masks.bool(),
-                    "num_boxes": num_boxes.long(),
-                }
-
-            if masks.ndim == 2:
-                masks = masks.unsqueeze(0).bool()
-                return {
-                    "masks": masks,
-                    "semantic_masks": masks,
-                    "num_boxes": torch.ones((1,), dtype=torch.long, device=device),
-                }
-
-            raise ValueError(
-                f"Unsupported single-entry batched target mask shape: {tuple(masks.shape)}"
-            )
-
-        # ------------------------------------------------------------------
-        # General case: list of per-sample targets
-        # Keep old behavior here.
-        # ------------------------------------------------------------------
         batched_masks = []
         batched_num_boxes = []
+        batched_semantic_masks = []
 
         for i, t in enumerate(targets):
             if not isinstance(t, dict):
                 raise TypeError(f"targets[{i}] should be dict, got {type(t)}")
+            if "masks" not in t:
+                raise KeyError(f"targets[{i}] missing 'masks', got keys={list(t.keys())}")
 
-            m = _pick_mask_tensor(t)
+            m = t["masks"]
+            if not torch.is_tensor(m):
+                m = torch.as_tensor(m)
 
             if m.numel() == 0:
                 m = torch.zeros((H, W), dtype=torch.bool, device=device)
                 batched_masks.append(m)
+                batched_semantic_masks.append(m.clone())
                 batched_num_boxes.append(0)
                 continue
 
-            # support [H,W] / [1,H,W] / [N,H,W]
             if m.ndim == 2:
-                pass
+                sample_mask = m
             elif m.ndim == 3:
                 if m.shape[0] == 1:
-                    m = m[0]
+                    sample_mask = m[0]
                 else:
-                    # 这里才是“单样本多实例 -> semantic union”
-                    m = m.bool().any(dim=0)
+                    sample_mask = m.bool().any(dim=0)
             elif m.ndim == 4 and m.shape[1] == 1:
                 if m.shape[0] == 1:
-                    m = m[0, 0]
+                    sample_mask = m[0, 0]
                 else:
-                    m = m[:, 0].bool().any(dim=0)
+                    sample_mask = m[:, 0].bool().any(dim=0)
             else:
                 raise ValueError(f"Unsupported mask shape for targets[{i}]: {tuple(m.shape)}")
 
-            batched_masks.append(m.to(device).bool())
-            batched_num_boxes.append(1)
+            sample_mask = sample_mask.to(device).bool()
+            batched_masks.append(sample_mask)
 
-        masks = torch.stack(batched_masks, dim=0)  # [B,H,W]
+            if "semantic_masks" in t and t["semantic_masks"] is not None:
+                sm = t["semantic_masks"]
+                if not torch.is_tensor(sm):
+                    sm = torch.as_tensor(sm)
+                if sm.ndim == 2:
+                    sample_sem = sm
+                elif sm.ndim == 3:
+                    if sm.shape[0] == 1:
+                        sample_sem = sm[0]
+                    else:
+                        sample_sem = sm.bool().any(dim=0)
+                elif sm.ndim == 4 and sm.shape[1] == 1:
+                    if sm.shape[0] == 1:
+                        sample_sem = sm[0, 0]
+                    else:
+                        sample_sem = sm[:, 0].bool().any(dim=0)
+                else:
+                    raise ValueError(
+                        f"Unsupported semantic_masks shape for targets[{i}]: {tuple(sm.shape)}"
+                    )
+                batched_semantic_masks.append(sample_sem.to(device).bool())
+            else:
+                batched_semantic_masks.append(sample_mask.clone())
+
+            num_boxes = t.get("num_boxes", None)
+            if torch.is_tensor(num_boxes):
+                if num_boxes.numel() == 1:
+                    batched_num_boxes.append(int(num_boxes.view(-1)[0].item()))
+                else:
+                    batched_num_boxes.append(int(num_boxes.view(-1).sum().item()))
+            else:
+                batched_num_boxes.append(1)
+
+        masks = torch.stack(batched_masks, dim=0)
+        semantic_masks = torch.stack(batched_semantic_masks, dim=0)
         num_boxes = torch.tensor(batched_num_boxes, dtype=torch.long, device=device)
 
         return {
-            "masks": masks.bool(),
-            "semantic_masks": masks.bool(),
-            "num_boxes": num_boxes.long(),
+            "masks": masks,
+            "semantic_masks": semantic_masks,
+            "num_boxes": num_boxes,
         }
 
     def compute_loss(self, outputs: Any, targets: Any) -> Dict[str, torch.Tensor]:
@@ -328,118 +390,166 @@ class RSSemanticOnlyLoss(nn.Module):
             )
 
         device = outputs["semantic_seg"].device
-        output_hw = tuple(outputs["semantic_seg"].shape[-2:])
+        pred = outputs["semantic_seg"]
+        pred_hw = tuple(pred.shape[-2:])
 
-        # ------------------------------------------------------------------
-        # RAW TARGETS
-        # ------------------------------------------------------------------
-        print("\n" + "=" * 80)
-        print("[DEBUG][RAW TARGETS]")
-        print("=" * 80)
-        print("[DEBUG] raw targets type =", type(targets))
+        ctx = getattr(self, "_debug_context", None)
+        should_debug = self._debug_print_count < self._debug_print_limit
 
-        if isinstance(targets, dict):
-            print("[DEBUG] raw target keys =", list(targets.keys()))
-            for k in ["masks", "semantic_masks", "num_boxes", "is_valid_mask", "is_exhaustive"]:
-                if k in targets:
-                    self._dbg_tensor(f"raw targets[{k}]", targets[k])
+        targets = self._collate_targets(targets, device, pred_hw)
 
-        elif isinstance(targets, list):
-            print("[DEBUG] raw targets list len =", len(targets))
-            if len(targets) > 0 and isinstance(targets[0], dict):
-                print("[DEBUG] raw targets[0] keys =", list(targets[0].keys()))
-                for k in ["masks", "semantic_masks", "num_boxes", "is_valid_mask", "is_exhaustive"]:
-                    if k in targets[0]:
-                        self._dbg_tensor(f"raw targets[0][{k}]", targets[0][k])
+        if should_debug:
+            print("\n[DEBUG][RSSemanticOnlyLoss][AFTER _collate_targets]")
+            if ctx is not None:
+                print(f"[DEBUG] phase={ctx['phase']} epoch={ctx['epoch']} step={ctx['step']}")
+                print("[DEBUG] texts[:8] =", ctx.get("texts"))
+                print("[DEBUG] image_ids[:8] =", ctx.get("image_ids"))
+                print("[DEBUG] category_ids[:8] =", ctx.get("category_ids"))
 
-        # ------------------------------------------------------------------
-        # COLLATE TARGETS
-        # ------------------------------------------------------------------
-        targets = self._collate_targets(targets, device, output_hw)
+            print("[DEBUG] collated targets[masks] shape =", tuple(targets["masks"].shape))
+            print("[DEBUG] collated masks batch_fg_ratio =", _fg_ratio(targets["masks"]))
+            print("[DEBUG] collated masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["masks"]))
 
-        print("\n[DEBUG][AFTER _collate_targets]")
-        self._dbg_tensor("collated targets[masks]", targets["masks"])
-        if "semantic_masks" in targets:
-            self._dbg_tensor("collated targets[semantic_masks]", targets["semantic_masks"])
-        self._dbg_tensor("collated targets[num_boxes]", targets["num_boxes"])
+            if "semantic_masks" in targets:
+                print("[DEBUG] collated semantic_masks shape =", tuple(targets["semantic_masks"].shape))
+                print("[DEBUG] collated semantic_masks batch_fg_ratio =", _fg_ratio(targets["semantic_masks"]))
+                print("[DEBUG] collated semantic_masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["semantic_masks"]))
 
-        # ------------------------------------------------------------------
-        # ALIGN TARGETS TO PRED BATCH
-        # ------------------------------------------------------------------
+            if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
+                print("[DEBUG] collated num_boxes[:8] =", targets["num_boxes"].detach().cpu().view(-1)[:8].tolist())
+
         targets = _align_semantic_targets_to_pred_batch(outputs, targets)
 
-        print("\n[DEBUG][AFTER _align_semantic_targets_to_pred_batch]")
-        self._dbg_tensor("aligned targets[masks]", targets["masks"])
-        if "semantic_masks" in targets:
-            self._dbg_tensor("aligned targets[semantic_masks]", targets["semantic_masks"])
-        self._dbg_tensor("aligned targets[num_boxes]", targets["num_boxes"])
+        if should_debug:
+            print("\n[DEBUG][RSSemanticOnlyLoss][AFTER _align_semantic_targets_to_pred_batch]")
+            print("[DEBUG] aligned targets[masks] shape =", tuple(targets["masks"].shape))
+            print("[DEBUG] aligned masks batch_fg_ratio =", _fg_ratio(targets["masks"]))
+            print("[DEBUG] aligned masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["masks"]))
 
-        # ------------------------------------------------------------------
-        # PREDICTION
-        # ------------------------------------------------------------------
-        pred = outputs["semantic_seg"].detach()
-        prob = pred.sigmoid()
-        pred_bin = (prob > 0.5)
+            if "semantic_masks" in targets:
+                print("[DEBUG] aligned semantic_masks shape =", tuple(targets["semantic_masks"].shape))
+                print("[DEBUG] aligned semantic_masks batch_fg_ratio =", _fg_ratio(targets["semantic_masks"]))
+                print("[DEBUG] aligned semantic_masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["semantic_masks"]))
 
-        print("\n[DEBUG][PRED]")
-        self._dbg_tensor("pred semantic_seg", pred)
-        self._dbg_tensor("pred prob", prob)
-        self._dbg_tensor("pred_bin@0.5", pred_bin)
+            if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
+                print("[DEBUG] aligned num_boxes[:8] =", targets["num_boxes"].detach().cpu().view(-1)[:8].tolist())
 
-        # ------------------------------------------------------------------
-        # UPSAMPLE PRED TO TARGET SIZE FOR FAIR FG-RATIO COMPARISON
-        # ------------------------------------------------------------------
-        tgt = targets["masks"].detach()
-        pred_up = torch.nn.functional.interpolate(
-            pred.float(),
-            size=tgt.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        prob_up = pred_up.sigmoid()
-        pred_up_bin = (prob_up > 0.5)
+        semantic_targets_1008 = _safe_semantic_masks(targets)
 
-        print("\n[DEBUG][PRED UPSAMPLED TO TARGET SIZE]")
-        self._dbg_tensor("pred_up", pred_up)
-        self._dbg_tensor("pred_up prob", prob_up)
-        self._dbg_tensor("pred_up_bin@0.5", pred_up_bin)
-
-        print(
-            "[DEBUG] compare fg ratio | "
-            f"target={tgt.float().mean().item():.6f}, "
-            f"pred@288={pred_bin.float().mean().item():.6f}, "
-            f"pred@target_size={pred_up_bin.float().mean().item():.6f}"
+        semantic_targets_288 = (
+            F.interpolate(
+                semantic_targets_1008.float().unsqueeze(1),
+                size=pred_hw,
+                mode="nearest",
+            )
+            .squeeze(1)
+            .bool()
         )
 
-        pred_up = torch.nn.functional.interpolate(
-            outputs["semantic_seg"].float(),
-            size=targets["masks"].shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        pred_bin = (pred_up.sigmoid().squeeze(1) > 0.5)
-        tgt_bin = targets["masks"].bool()
+        if should_debug:
+            print("\n[DEBUG][RSSemanticOnlyLoss][FINAL SEM TARGETS]")
+            print("[DEBUG] semantic_targets_1008 shape =", tuple(semantic_targets_1008.shape))
+            print("[DEBUG] semantic_targets_1008 batch_fg_ratio =", _fg_ratio(semantic_targets_1008))
+            print("[DEBUG] semantic_targets_1008 per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(semantic_targets_1008))
+            print("[DEBUG] semantic_targets_288 shape =", tuple(semantic_targets_288.shape))
+            print("[DEBUG] semantic_targets_288 batch_fg_ratio =", _fg_ratio(semantic_targets_288))
+            print("[DEBUG] semantic_targets_288 per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(semantic_targets_288))
 
-        intersection = (pred_bin & tgt_bin).sum(dim=(1, 2))
-        union = (pred_bin | tgt_bin).sum(dim=(1, 2))
-        iou_each = intersection.float() / (union.float() + 1e-8)
+        loss_targets = dict(targets)
+        loss_targets["semantic_masks"] = semantic_targets_288
+        loss_targets["masks"] = semantic_targets_288
 
-        print("[DEBUG] intersection mean =", intersection.float().mean().item())
-        print("[DEBUG] union mean =", union.float().mean().item())
-        print("[DEBUG] iou_each mean =", iou_each.mean().item())
-        print("[DEBUG] iou_each min/max =", iou_each.min().item(), iou_each.max().item())
-        
-        # ------------------------------------------------------------------
-        # LOSS
-        # ------------------------------------------------------------------
-        loss_dict = self.loss_fn_semantic_seg(outputs, targets)
+        loss_dict = self.loss_fn_semantic_seg(outputs, loss_targets)
 
-        print("\n[DEBUG][LOSS DICT]")
-        for k, v in loss_dict.items():
-            if torch.is_tensor(v):
-                print(f"[DEBUG] {k} = {v.detach().float().mean().item():.6f}")
-            else:
-                print(f"[DEBUG] {k} = {v}")
+        with torch.no_grad():
+            pred_prob_288 = pred.float().sigmoid()
+            pred_up_1008 = F.interpolate(
+                pred.float(),
+                size=semantic_targets_1008.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+            pred_prob_1008 = pred_up_1008.sigmoid()
+
+            # Keep original 0.5 metrics for backwards compatibility.
+            pred_bin_288_t05 = pred_prob_288 > 0.5
+            pred_bin_1008_t05 = pred_prob_1008 > 0.5
+            miou_288_t05 = _compute_bin_iou(pred_bin_288_t05[:, 0], semantic_targets_288)
+            miou_1008_t05 = _compute_bin_iou(pred_bin_1008_t05[:, 0], semantic_targets_1008)
+
+            loss_dict["miou_semantic_seg_288"] = miou_288_t05
+            loss_dict["miou_semantic_seg_1008"] = miou_1008_t05
+            loss_dict["pred_fg_ratio_288"] = pred_bin_288_t05.float().mean()
+            loss_dict["pred_fg_ratio_1008"] = pred_bin_1008_t05.float().mean()
+            loss_dict["target_fg_ratio_288"] = semantic_targets_288.float().mean()
+            loss_dict["target_fg_ratio_1008"] = semantic_targets_1008.float().mean()
+
+            # Probability distribution summary to judge calibration directly.
+            prob_stats_288 = _compute_prob_distribution(pred_prob_288)
+            prob_stats_1008 = _compute_prob_distribution(pred_prob_1008)
+            for name, val in prob_stats_288.items():
+                loss_dict[f"pred_prob_{name}_288"] = val
+            for name, val in prob_stats_1008.items():
+                loss_dict[f"pred_prob_{name}_1008"] = val
+
+            # Multi-threshold calibration view: 0.3 / 0.4 / 0.5 by default.
+            threshold_debug_rows = []
+            for th in self.calibration_thresholds:
+                pred_bin_288 = pred_prob_288 > th
+                pred_bin_1008 = pred_prob_1008 > th
+                miou_288 = _compute_bin_iou(pred_bin_288[:, 0], semantic_targets_288)
+                miou_1008 = _compute_bin_iou(pred_bin_1008[:, 0], semantic_targets_1008)
+                pred_fg_288 = pred_bin_288.float().mean()
+                pred_fg_1008 = pred_bin_1008.float().mean()
+                tag = _threshold_tag(th)
+                loss_dict[f"miou_semantic_seg_288_{tag}"] = miou_288
+                loss_dict[f"miou_semantic_seg_1008_{tag}"] = miou_1008
+                loss_dict[f"pred_fg_ratio_288_{tag}"] = pred_fg_288
+                loss_dict[f"pred_fg_ratio_1008_{tag}"] = pred_fg_1008
+                threshold_debug_rows.append(
+                    (
+                        th,
+                        float(pred_fg_288.item()),
+                        float(miou_288.item()),
+                        float(pred_fg_1008.item()),
+                        float(miou_1008.item()),
+                    )
+                )
+
+            if should_debug:
+                print("\n[DEBUG][RSSemanticOnlyLoss][288 DIAG]")
+                print(
+                    f"[DEBUG] pred_288 shape={tuple(pred.shape)} "
+                    f"prob_mean={pred_prob_288.mean().item():.6f} "
+                    f"pred_fg@0.5={pred_bin_288_t05.float().mean().item():.6f} "
+                    f"target_fg={semantic_targets_288.float().mean().item():.6f} "
+                    f"miou_288={miou_288_t05.item():.6f}"
+                )
+                print("[DEBUG][RSSemanticOnlyLoss][1008 DIAG]")
+                print(
+                    f"[DEBUG] pred_up_1008 shape={tuple(pred_up_1008.shape)} "
+                    f"prob_mean={pred_prob_1008.mean().item():.6f} "
+                    f"pred_fg@0.5={pred_bin_1008_t05.float().mean().item():.6f} "
+                    f"target_fg={semantic_targets_1008.float().mean().item():.6f} "
+                    f"miou_1008={miou_1008_t05.item():.6f}"
+                )
+                print("[DEBUG][RSSemanticOnlyLoss][PROB DIST]")
+                print(
+                    f"[DEBUG] 288 mean={prob_stats_288['mean'].item():.6f} std={prob_stats_288['std'].item():.6f} "
+                    f"p10={prob_stats_288['p10'].item():.6f} p50={prob_stats_288['p50'].item():.6f} p90={prob_stats_288['p90'].item():.6f}"
+                )
+                print(
+                    f"[DEBUG] 1008 mean={prob_stats_1008['mean'].item():.6f} std={prob_stats_1008['std'].item():.6f} "
+                    f"p10={prob_stats_1008['p10'].item():.6f} p50={prob_stats_1008['p50'].item():.6f} p90={prob_stats_1008['p90'].item():.6f}"
+                )
+                print("[DEBUG][RSSemanticOnlyLoss][THRESH CALIBRATION]")
+                for th, fg288, mi288, fg1008, mi1008 in threshold_debug_rows:
+                    print(
+                        f"[DEBUG] th={th:.1f} | "
+                        f"288: pred_fg={fg288:.6f} miou={mi288:.6f} | "
+                        f"1008: pred_fg={fg1008:.6f} miou={mi1008:.6f}"
+                    )
+                self._debug_print_count += 1
 
         cleaned = {}
         for k, v in loss_dict.items():

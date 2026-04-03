@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_prompt_soft_only_1xA6000_test"
+  experiment_log_dir: "outputs/dlrsd_prompt_soft_only_minimal_lrcheck_1xA6000"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -126,15 +126,15 @@ scratch:
   lrd_vision_backbone: 1.0
   wd: 0.0
 
-  scheduler_timescale: 20
+  scheduler_timescale: 400
   scheduler_warmup: 10
   scheduler_cooldown: 10
 
   gradient_accumulation_steps: 1
 
   # 保持 batch=16，当前是比较好的甜点区
-  train_batch_size: 16
-  val_batch_size: 16
+  train_batch_size: 32
+  val_batch_size: 32
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -155,7 +155,7 @@ trainer:
   skip_saving_ckpts: False
   empty_gpu_mem_cache_after_eval: True
   skip_first_val: False
-  max_epochs: 10
+  max_epochs: 20
   accelerator: cuda
   seed_value: 1230
   val_epoch_freq: 1

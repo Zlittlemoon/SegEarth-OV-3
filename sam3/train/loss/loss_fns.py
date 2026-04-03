@@ -1037,8 +1037,7 @@ class SemanticSegCriterion(LossWithWeights):
                         F.interpolate(
                             semantic_targets.float().unsqueeze(1),
                             size=size,
-                            mode="bilinear",
-                            align_corners=False,
+                            mode="nearest",
                         )
                         .squeeze(1)
                         .bool()
@@ -1052,8 +1051,7 @@ class SemanticSegCriterion(LossWithWeights):
                         F.interpolate(
                             targets["masks"].float().unsqueeze(1),
                             size=size,
-                            mode="bilinear",
-                            align_corners=False,
+                            mode="nearest",
                         )
                         .squeeze(1)
                         .bool()

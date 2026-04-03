@@ -34,6 +34,43 @@ def _update_out(out, out_name, out_value, auxiliary=True, update_aux=True):
             aux_output[out_name] = aux_value
 
 
+def _is_rank0():
+    return (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
+
+
+def _rs_debug_enabled():
+    return os.environ.get("SAM3_RS_DEBUG_PROMPT", "0") == "1"
+
+
+def _rs_should_log():
+    return _rs_debug_enabled() and _is_rank0()
+
+
+def _brief_tensor(x):
+    if x is None:
+        return None
+    if not torch.is_tensor(x):
+        return {"type": str(type(x))}
+    y = x.detach()
+    out = {
+        "shape": tuple(y.shape),
+        "dtype": str(y.dtype),
+        "device": str(y.device),
+    }
+    if y.numel() > 0:
+        yf = y.float()
+        out["mean"] = float(yf.mean().item())
+        out["std"] = float(yf.std().item()) if y.numel() > 1 else 0.0
+        out["min"] = float(yf.min().item())
+        out["max"] = float(yf.max().item())
+    return out
+
+
+def _debug_print(*args, **kwargs):
+    if _rs_should_log():
+        print(*args, **kwargs)
+
+
 class Sam3Image(torch.nn.Module):
     TEXT_ID_FOR_TEXT = 0
     TEXT_ID_FOR_VISUAL = 1
@@ -186,6 +223,15 @@ class Sam3Image(torch.nn.Module):
         txt_feats = backbone_out["language_features"][:, txt_ids] # [32, 1, 256]
         txt_masks = backbone_out["language_mask"][txt_ids] # [1, 32]
 
+        if _rs_should_log():
+            _debug_print("\n[DEBUG][_encode_prompt]")
+            if torch.is_tensor(txt_ids):
+                _debug_print("txt_ids =", txt_ids.detach().cpu().view(-1).tolist())
+            else:
+                _debug_print("txt_ids =", txt_ids)
+            _debug_print("txt_feats =", _brief_tensor(txt_feats))
+            _debug_print("txt_masks =", _brief_tensor(txt_masks))
+
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
@@ -216,6 +262,10 @@ class Sam3Image(torch.nn.Module):
         else:
             prompt = torch.cat([geo_feats, visual_prompt_embed], dim=0)
             prompt_mask = torch.cat([geo_masks, visual_prompt_mask], dim=1)
+
+        if _rs_should_log():
+            _debug_print("prompt =", _brief_tensor(prompt))
+            _debug_print("prompt_mask =", _brief_tensor(prompt_mask))
         return prompt, prompt_mask, backbone_out
 
     def _run_encoder(
@@ -457,6 +507,12 @@ class Sam3Image(torch.nn.Module):
             prompt, prompt_mask, backbone_out = self._encode_prompt(
                 backbone_out, find_input, geometric_prompt
             )
+
+        if _rs_should_log():
+            _debug_print("\n[DEBUG][forward_grounding][after _encode_prompt]")
+            _debug_print("prompt =", _brief_tensor(prompt))
+            _debug_print("prompt_mask =", _brief_tensor(prompt_mask))
+    
         # Run the encoder
         with torch.profiler.record_function("SAM3Image._run_encoder"):
             backbone_out, encoder_out, _ = self._run_encoder(
@@ -495,6 +551,22 @@ class Sam3Image(torch.nn.Module):
                 prompt=prompt,
                 prompt_mask=prompt_mask,
                 hs=hs,
+            )
+
+        if hasattr(find_input, "text_ids") and torch.is_tensor(find_input.text_ids):
+            print(
+                "[DEBUG][forward_grounding] text_ids =",
+                find_input.text_ids.detach().cpu().view(-1).tolist()
+            )   
+        
+        if "semantic_seg" in out and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+            seg = out["semantic_seg"]
+            print("\n[DEBUG][forward_grounding][after _run_segmentation_heads]")
+            print(
+                "semantic_seg shape =", tuple(seg.shape),
+                "min =", seg.float().min().item(),
+                "max =", seg.float().max().item(),
+                "mean =", seg.float().mean().item(),
             )
 
         if self.training or self.num_interactive_steps_val > 0:
@@ -545,6 +617,19 @@ class Sam3Image(torch.nn.Module):
 
         text_outputs = self.backbone.forward_text(input.find_text_batch, device=device)
         backbone_out.update(text_outputs)
+
+        if _rs_should_log():
+            _debug_print("\n[DEBUG][Sam3Image.forward]")
+            _debug_print("find_text_batch =", list(input.find_text_batch))
+            for k, v in text_outputs.items():
+                if torch.is_tensor(v):
+                    _debug_print(f"text_outputs[{k}] =", _brief_tensor(v))
+            find_input = input.find_inputs[0]
+            if hasattr(find_input, "text_ids") and torch.is_tensor(find_input.text_ids):
+                _debug_print(
+                    "find_input.text_ids[:16] =",
+                    find_input.text_ids.detach().cpu().view(-1)[:16].tolist(),
+                )
 
         previous_stages_out = SAM3Output(
             iter_mode=SAM3Output.IterMode.LAST_STEP_PER_STAGE

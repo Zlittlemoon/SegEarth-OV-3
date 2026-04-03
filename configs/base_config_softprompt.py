@@ -1,8 +1,12 @@
-# base config
+# base config (soft-prompt)
 
 model = dict(
-    type='SegEarthOV3Segmentation',
-    model_type='SAM3'
+    type='SegEarthOV3SegmentationSoftPrompt',
+    model_type='SAM3',
+    checkpoint_path='weights/sam3/sam3.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_1xA6000_test/checkpoints/checkpoint.pt',
+    use_soft_prompt=True,
+    bpe_path='./sam3/assets/bpe_simple_vocab_16e6.txt.gz',
 )
 
 test_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'], prefix='val')

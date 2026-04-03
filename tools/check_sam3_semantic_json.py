@@ -129,6 +129,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exit with non-zero code if any hard error is found",
     )
+    parser.add_argument(
+        "--vis-image-id",
+        type=int,
+        default=None,
+        help="Visualize queries only for this image_id",
+    ) 
     return parser.parse_args()
 
 
@@ -455,15 +461,21 @@ def main() -> None:
         for q in queries:
             obj_ids = q.get("object_ids_output", [])
             image_id = q.get("image_id", None)
+
+            if args.vis_image_id is not None and image_id != args.vis_image_id:
+                continue
+
             if image_id not in image_by_id:
                 continue
             if len(obj_ids) == 0:
                 continue
+
             ok = True
             for oid in obj_ids:
                 if oid not in decoded_ann_masks:
                     ok = False
                     break
+
             if ok:
                 valid_queries.append(q)
 
