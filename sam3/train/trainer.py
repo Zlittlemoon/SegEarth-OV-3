@@ -2412,19 +2412,6 @@ class Trainer:
         if "lr" not in options_conf or options_conf["lr"] is None or len(options_conf["lr"]) == 0:
             raise KeyError("Optimizer options must contain a non-empty 'lr' config list.")
 
-        base_lr_cfg = copy.deepcopy(options_conf["lr"][0])
-        soft_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, soft_lr)
-        text_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, text_lr)
-
-        soft_lr_cfg["param_names"] = ["soft_prompt"]
-        text_lr_cfg["param_names"] = [
-            "sam3.backbone.language_backbone.encoder.text_projection",
-            "sam3.transformer.decoder.layers.*.ca_text.*",
-            "sam3.transformer.decoder.layers.*.catext_norm.*",
-        ]
-
-        options_conf["lr"] = [soft_lr_cfg, text_lr_cfg]
-
         soft_names, text_names, unexpected_names = _collect_trainable_param_names_for_text_only(self.model)
         if len(soft_names) == 0:
             raise RuntimeError("No trainable 'soft_prompt' parameter found.")
@@ -2435,6 +2422,17 @@ class Trainer:
                 "[TEXT-ONLY OPTIM] Found trainable params outside soft/text groups:\n"
                 + "\n".join(unexpected_names[:200])
             )
+
+        base_lr_cfg = copy.deepcopy(options_conf["lr"][0])
+        soft_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, soft_lr)
+        soft_lr_cfg["param_names"] = sorted(soft_names)
+
+        if len(text_names) > 0:
+            text_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, text_lr)
+            text_lr_cfg["param_names"] = sorted(text_names)
+            options_conf["lr"] = [soft_lr_cfg, text_lr_cfg]
+        else:
+            options_conf["lr"] = [soft_lr_cfg]
 
         param_allowlist = set(soft_names) | set(text_names)
         logging.info("[TEXT-ONLY OPTIM] soft_prompt lr = %.8f", soft_lr)

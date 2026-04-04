@@ -1,15 +1,11 @@
-_base_ = './base_config.py'
+_base_ = './base_config_softprompt.py'
 
 model = dict(
-    type='SegEarthOV3SoftPromptSegmentation',
     classname_path='./configs/cls_loveda.txt',
-    sam3_base_ckpt='weights/sam3/sam3.pt',
-    soft_prompt_ckpt='outputs/dlrsd_prompt_soft_only_4x3090/checkpoints/checkpoint_10.pt',
     confidence_threshold=0.5,
-    prob_thd=0.0,
-    slide_stride=0,
-    slide_crop=0,
-    device='cuda',
+    prob_thd=0.5,
+    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_minimal_lrcheck_1xA6000/checkpoints/checkpoint_20.pt',
+    use_soft_prompt=True,
 )
 
 dataset_type = 'LoveDADataset'
