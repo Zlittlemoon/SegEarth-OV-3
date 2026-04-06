@@ -93,6 +93,33 @@ def _compute_bin_iou(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.
     return iou.mean()
 
 
+def _compute_bin_macc(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tensor:
+    """Binary mean class accuracy (mAcc) over foreground/background."""
+    pred_bin = pred_bin.bool()
+    target_bin = target_bin.bool()
+
+    pred_flat = pred_bin.flatten(1)
+    target_flat = target_bin.flatten(1)
+
+    # Foreground class accuracy: TP / GT_fg
+    tp_fg = (pred_flat & target_flat).sum(dim=1).float()
+    gt_fg = target_flat.sum(dim=1).float()
+    acc_fg = tp_fg / torch.clamp(gt_fg, min=1.0)
+    valid_fg = gt_fg > 0
+
+    # Background class accuracy: TN / GT_bg
+    tp_bg = ((~pred_flat) & (~target_flat)).sum(dim=1).float()
+    gt_bg = (~target_flat).sum(dim=1).float()
+    acc_bg = tp_bg / torch.clamp(gt_bg, min=1.0)
+    valid_bg = gt_bg > 0
+
+    valid_count = valid_fg.float() + valid_bg.float()
+    per_sample_macc = (acc_fg * valid_fg.float() + acc_bg * valid_bg.float()) / torch.clamp(
+        valid_count, min=1.0
+    )
+    return per_sample_macc.mean()
+
+
 def _fg_ratio(x: torch.Tensor) -> float:
     return x.float().mean().item()
 
@@ -476,9 +503,18 @@ class RSSemanticOnlyLoss(nn.Module):
             pred_bin_1008_t05 = pred_prob_1008 > 0.5
             miou_288_t05 = _compute_bin_iou(pred_bin_288_t05[:, 0], semantic_targets_288)
             miou_1008_t05 = _compute_bin_iou(pred_bin_1008_t05[:, 0], semantic_targets_1008)
+            macc_288_t05 = _compute_bin_macc(pred_bin_288_t05[:, 0], semantic_targets_288)
+            macc_1008_t05 = _compute_bin_macc(pred_bin_1008_t05[:, 0], semantic_targets_1008)
 
             loss_dict["miou_semantic_seg_288"] = miou_288_t05
             loss_dict["miou_semantic_seg_1008"] = miou_1008_t05
+            loss_dict["macc_semantic_seg_288"] = macc_288_t05
+            loss_dict["macc_semantic_seg_1008"] = macc_1008_t05
+            # Explicitly expose t05 as the primary score for monitoring/selection.
+            loss_dict["primary_miou_semantic_seg_288"] = miou_288_t05
+            loss_dict["primary_miou_semantic_seg_1008"] = miou_1008_t05
+            loss_dict["primary_macc_semantic_seg_288"] = macc_288_t05
+            loss_dict["primary_macc_semantic_seg_1008"] = macc_1008_t05
             loss_dict["pred_fg_ratio_288"] = pred_bin_288_t05.float().mean()
             loss_dict["pred_fg_ratio_1008"] = pred_bin_1008_t05.float().mean()
             loss_dict["target_fg_ratio_288"] = semantic_targets_288.float().mean()
@@ -499,11 +535,15 @@ class RSSemanticOnlyLoss(nn.Module):
                 pred_bin_1008 = pred_prob_1008 > th
                 miou_288 = _compute_bin_iou(pred_bin_288[:, 0], semantic_targets_288)
                 miou_1008 = _compute_bin_iou(pred_bin_1008[:, 0], semantic_targets_1008)
+                macc_288 = _compute_bin_macc(pred_bin_288[:, 0], semantic_targets_288)
+                macc_1008 = _compute_bin_macc(pred_bin_1008[:, 0], semantic_targets_1008)
                 pred_fg_288 = pred_bin_288.float().mean()
                 pred_fg_1008 = pred_bin_1008.float().mean()
                 tag = _threshold_tag(th)
                 loss_dict[f"miou_semantic_seg_288_{tag}"] = miou_288
                 loss_dict[f"miou_semantic_seg_1008_{tag}"] = miou_1008
+                loss_dict[f"macc_semantic_seg_288_{tag}"] = macc_288
+                loss_dict[f"macc_semantic_seg_1008_{tag}"] = macc_1008
                 loss_dict[f"pred_fg_ratio_288_{tag}"] = pred_fg_288
                 loss_dict[f"pred_fg_ratio_1008_{tag}"] = pred_fg_1008
                 threshold_debug_rows.append(

@@ -2306,7 +2306,6 @@ class Trainer:
         def _minimal_unfreeze_for_rs(model, preset: str = None):
             if preset is None:
                 preset = os.getenv("SAM3_TEXT_UNFREEZE_PRESET", "text_last1")
-            preset = str(preset).strip().lower().replace("-", "_").replace("+", "_")
 
             for _, p in model.named_parameters():
                 p.requires_grad = False
@@ -2366,17 +2365,7 @@ class Trainer:
                 exact_names = {"soft_prompt"}
                 prefixes = ("sam3.segmentation_head.",)
             else:
-                supported = [
-                    "soft_only",
-                    "text_proj_only",
-                    "text_last1",
-                    "text_last2",
-                    "text_all6",
-                    "head_prompt",
-                ]
-                raise ValueError(
-                    f"Unknown preset: {preset}. Supported presets: {supported}"
-                )
+                raise ValueError(f"Unknown preset: {preset}")
 
             changed = []
             trainable_numel = 0

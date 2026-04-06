@@ -5,7 +5,7 @@ model = dict(
     classname_path='./configs/cls_vdd.txt',
     prob_thd=0.3,
     confidence_threshold=0.5,
-    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_minimal_lrcheck_1xA6000/checkpoints/checkpoint_20.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_prompt_head_prompt_stage1_t05_1xA6000/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 
