@@ -122,13 +122,19 @@ class SAM3VLBackbone(nn.Module):
         return output
 
     def forward_text(
-        self, captions, input_boxes=None, additional_text=None, device="cuda"
+        self,
+        captions,
+        input_boxes=None,
+        additional_text=None,
+        device="cuda",
+        soft_prompt_embed=None,
     ):
         return activation_ckpt_wrapper(self._forward_text_no_ack_ckpt)(
             captions=captions,
             input_boxes=input_boxes,
             additional_text=additional_text,
             device=device,
+            soft_prompt_embed=soft_prompt_embed,
             act_ckpt_enable=self.act_ckpt_whole_language_backbone and self.training,
         )
 
@@ -138,6 +144,7 @@ class SAM3VLBackbone(nn.Module):
         input_boxes=None,
         additional_text=None,
         device="cuda",
+        soft_prompt_embed=None,
     ):
         output = {}
 
@@ -147,6 +154,10 @@ class SAM3VLBackbone(nn.Module):
             # if there are additional_text, we piggy-back them into this forward.
             # They'll be used later for output alignment
             text_to_encode += additional_text
+            if soft_prompt_embed is not None:
+                raise ValueError(
+                    "soft_prompt_embed with additional_text is not supported in this path."
+                )
 
         sdpa_context = sdpa_kernel(
             [
@@ -158,7 +169,10 @@ class SAM3VLBackbone(nn.Module):
 
         with sdpa_context:
             text_attention_mask, text_memory, text_embeds = self.language_backbone(
-                text_to_encode, input_boxes, device=device
+                text_to_encode,
+                input_boxes,
+                device=device,
+                soft_prompt_embed=soft_prompt_embed,
             )
 
         if additional_text is not None:

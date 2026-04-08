@@ -1068,7 +1068,7 @@ class LoggingConf:
 
 
 def _is_soft_prompt_param(name: str) -> bool:
-    return name == "soft_prompt"
+    return name == "soft_prompt" or name.startswith("soft_prompt_proj.")
 
 
 def _is_text_prompt_param(name: str) -> bool:
@@ -2328,7 +2328,12 @@ class Trainer:
             for _, p in model.named_parameters():
                 p.requires_grad = False
 
-            exact_names = {"soft_prompt"}
+            soft_exact_names = {
+                n for n, _ in model.named_parameters() if _is_soft_prompt_param(n)
+            }
+            if len(soft_exact_names) == 0:
+                soft_exact_names = {"soft_prompt"}
+            exact_names = set(soft_exact_names)
             text_proj_name = "sam3.backbone.language_backbone.encoder.text_projection"
 
             layer_prefixes = {
@@ -2360,17 +2365,17 @@ class Trainer:
 
             prefixes = ()
             if preset == "soft_only":
-                exact_names = {"soft_prompt"}
+                exact_names = set(soft_exact_names)
             elif preset == "text_proj_only":
-                exact_names = {"soft_prompt", text_proj_name}
+                exact_names = set(soft_exact_names) | {text_proj_name}
             elif preset == "text_last1":
-                exact_names = {"soft_prompt", text_proj_name}
+                exact_names = set(soft_exact_names) | {text_proj_name}
                 prefixes = layer_prefixes["l5"]
             elif preset == "text_last2":
-                exact_names = {"soft_prompt", text_proj_name}
+                exact_names = set(soft_exact_names) | {text_proj_name}
                 prefixes = layer_prefixes["l4"] + layer_prefixes["l5"]
             elif preset == "text_all6":
-                exact_names = {"soft_prompt", text_proj_name}
+                exact_names = set(soft_exact_names) | {text_proj_name}
                 prefixes = (
                     layer_prefixes["l0"]
                     + layer_prefixes["l1"]
@@ -2380,7 +2385,7 @@ class Trainer:
                     + layer_prefixes["l5"]
                 )
             elif preset == "head_prompt":
-                exact_names = {"soft_prompt"}
+                exact_names = set(soft_exact_names)
                 prefixes = ("sam3.segmentation_head.",)
             else:
                 supported = [

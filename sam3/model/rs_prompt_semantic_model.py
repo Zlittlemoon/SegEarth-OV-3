@@ -40,7 +40,13 @@ class RSPromptSemanticModel(nn.Module):
         self.prompt_tuning_mode = os.environ.get("SAM3_RS_PROMPT_TUNING", "soft").strip().lower()
         self.soft_prompt_len = int(os.environ.get("SAM3_RS_SOFT_PROMPT_LEN", "34"))
         self.prompt_dim = int(os.environ.get("SAM3_RS_PROMPT_DIM", "256"))
-        # Default to concat soft prompt ([prompt; soft_prompt]) to preserve text conditioning.
+        self.soft_prompt_pos = os.environ.get("SAM3_RS_SOFT_PROMPT_POS", "post_concat").strip().lower()
+        if self.soft_prompt_pos not in {"post_concat", "pre_text"}:
+            raise ValueError(
+                f"Unknown SAM3_RS_SOFT_PROMPT_POS={self.soft_prompt_pos}. "
+                "Expected 'post_concat' or 'pre_text'."
+            )
+        # Default to post_concat soft prompt ([prompt; soft_prompt]) to preserve text conditioning.
         self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "0") == "1"
 
         if self.prompt_tuning_mode == "soft":
@@ -48,8 +54,15 @@ class RSPromptSemanticModel(nn.Module):
                 torch.zeros(self.soft_prompt_len, 1, self.prompt_dim)
             )
             nn.init.normal_(self.soft_prompt, std=0.02)
+            text_width = int(getattr(self.sam3.backbone.language_backbone.encoder, "width", self.prompt_dim))
+            if self.soft_prompt_pos == "pre_text" and text_width != self.prompt_dim:
+                self.soft_prompt_proj = nn.Linear(self.prompt_dim, text_width, bias=False)
+            else:
+                self.soft_prompt_proj = None
 
         elif self.prompt_tuning_mode == "mlp":
+            if self.soft_prompt_pos == "pre_text":
+                raise ValueError("SAM3_RS_SOFT_PROMPT_POS='pre_text' requires SAM3_RS_PROMPT_TUNING='soft'.")
             self.prompt_mlp = nn.Sequential(
                 nn.Linear(self.prompt_dim, self.prompt_dim),
                 nn.GELU(),
@@ -110,6 +123,10 @@ class RSPromptSemanticModel(nn.Module):
 
         if hasattr(self, "soft_prompt"):
             self.soft_prompt.requires_grad = True
+
+        if hasattr(self, "soft_prompt_proj") and self.soft_prompt_proj is not None:
+            for p in self.soft_prompt_proj.parameters():
+                p.requires_grad = True
 
         if hasattr(self, "prompt_mlp"):
             for p in self.prompt_mlp.parameters():
@@ -246,6 +263,8 @@ class RSPromptSemanticModel(nn.Module):
         soft_prompt_param = getattr(self, "soft_prompt", None)
         if soft_prompt_param is None:
             return prompt, prompt_mask
+        if self.soft_prompt_pos != "post_concat":
+            return prompt, prompt_mask
 
         if prompt.shape[-1] != self.prompt_dim:
             raise RuntimeError(
@@ -287,6 +306,17 @@ class RSPromptSemanticModel(nn.Module):
             )
             tuned_mask = torch.cat([prompt_mask, soft_mask], dim=1)
         return tuned_prompt, tuned_mask
+
+    def _build_pre_text_soft_prompt(self, batch_size: int):
+        soft_prompt_param = getattr(self, "soft_prompt", None)
+        if soft_prompt_param is None:
+            return None
+        soft_prompt = soft_prompt_param
+        if soft_prompt.shape[1] != batch_size:
+            soft_prompt = soft_prompt.expand(-1, batch_size, -1)
+        if hasattr(self, "soft_prompt_proj") and self.soft_prompt_proj is not None:
+            soft_prompt = self.soft_prompt_proj(soft_prompt)
+        return soft_prompt
 
     def _print_trainable_summary_once(self):
         if hasattr(self, "_printed_trainable_summary") and self._printed_trainable_summary:
@@ -345,7 +375,14 @@ class RSPromptSemanticModel(nn.Module):
         backbone_out.update(self.sam3.backbone.forward_image(images))
 
         device = self.device
-        text_outputs = self.sam3.backbone.forward_text(captions, device=device)
+        pre_text_soft_prompt = None
+        if self.soft_prompt_pos == "pre_text":
+            pre_text_soft_prompt = self._build_pre_text_soft_prompt(batch_size=len(captions))
+        text_outputs = self.sam3.backbone.forward_text(
+            captions,
+            device=device,
+            soft_prompt_embed=pre_text_soft_prompt,
+        )
         backbone_out.update(text_outputs)
 
         # 4) official geometric prompt path

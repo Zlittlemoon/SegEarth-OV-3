@@ -226,10 +226,21 @@ class TextTransformer(nn.Module):
         return mask
 
     def forward(
-        self, text: torch.Tensor
+        self,
+        text: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        seq_len = text.shape[1]
-        x = self.token_embedding(text)  # [batch_size, n_ctx, d_model]
+        if inputs_embeds is None:
+            assert text is not None
+            x = self.token_embedding(text)  # [batch_size, n_ctx, d_model]
+            seq_len = text.shape[1]
+        else:
+            x = inputs_embeds
+            seq_len = x.shape[1]
+            if text is not None and text.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"Batch mismatch between text ({text.shape[0]}) and inputs_embeds ({x.shape[0]})."
+                )
 
         attn_mask = self.attn_mask
         if attn_mask is not None:
@@ -288,6 +299,7 @@ class VETextEncoder(nn.Module):
         text: Union[List[str], Tuple[torch.Tensor, torch.Tensor, dict]],
         input_boxes: Optional[List] = None,
         device: torch.device = None,
+        soft_prompt_embed: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if isinstance(text[0], str):
             # no use case for this
@@ -299,11 +311,63 @@ class VETextEncoder(nn.Module):
             )  # [b, seq_len]
             text_attention_mask = (tokenized != 0).bool()
 
+            if soft_prompt_embed is not None:
+                if soft_prompt_embed.dim() != 3:
+                    raise ValueError(
+                        f"soft_prompt_embed must be [L, B, C], got {tuple(soft_prompt_embed.shape)}"
+                    )
+                if soft_prompt_embed.shape[2] != self.encoder.width:
+                    raise ValueError(
+                        "soft_prompt_embed dim mismatch: "
+                        f"got {soft_prompt_embed.shape[2]}, expected {self.encoder.width}"
+                    )
+                batch_size = tokenized.shape[0]
+                if soft_prompt_embed.shape[1] not in (1, batch_size):
+                    raise ValueError(
+                        "soft_prompt_embed batch mismatch: "
+                        f"got {soft_prompt_embed.shape[1]}, expected 1 or {batch_size}"
+                    )
+                if soft_prompt_embed.shape[1] == 1 and batch_size != 1:
+                    soft_prompt_embed = soft_prompt_embed.expand(-1, batch_size, -1)
+
+                soft_len = int(soft_prompt_embed.shape[0])
+                if soft_len >= self.context_length:
+                    raise ValueError(
+                        f"soft_prompt length {soft_len} must be smaller than context_length {self.context_length}"
+                    )
+
+                max_text_len = self.context_length - soft_len
+                if tokenized.shape[1] > max_text_len:
+                    tokenized = tokenized[:, :max_text_len]
+                    text_attention_mask = text_attention_mask[:, :max_text_len]
+
+                # [L, B, C] -> [B, L, C]
+                soft_embeds_bld = soft_prompt_embed.permute(1, 0, 2).to(
+                    device=tokenized.device,
+                    dtype=self.encoder.token_embedding.weight.dtype,
+                )
+            else:
+                soft_len = 0
+                soft_embeds_bld = None
+
             # manually embed the tokens
             inputs_embeds = self.encoder.token_embedding(
                 tokenized
             )  # [b, seq_len, d=1024]
-            _, text_memory = self.encoder(tokenized)  # [b, seq_len, d=1024]
+
+            if soft_embeds_bld is not None:
+                inputs_embeds = torch.cat([soft_embeds_bld, inputs_embeds], dim=1)
+                soft_mask = torch.ones(
+                    (tokenized.shape[0], soft_len),
+                    device=text_attention_mask.device,
+                    dtype=text_attention_mask.dtype,
+                )
+                text_attention_mask = torch.cat([soft_mask, text_attention_mask], dim=1)
+
+            _, text_memory = self.encoder(
+                text=tokenized,
+                inputs_embeds=inputs_embeds,
+            )  # [b, seq_len_total, d=1024]
 
             assert text_memory.shape[1] == inputs_embeds.shape[1]
             # Invert attention mask because its the opposite in pytorch transformer
@@ -314,6 +378,8 @@ class VETextEncoder(nn.Module):
             text_memory_resized = self.resizer(text_memory)
         else:
             # The text is already encoded, use as is.
+            if soft_prompt_embed is not None:
+                raise ValueError("soft_prompt_embed is only supported when raw text strings are provided.")
             text_attention_mask, text_memory_resized, tokenized = text
             inputs_embeds = tokenized["inputs_embeds"]
             assert (
