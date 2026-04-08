@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_prompt_soft_only_1xA6000_test_epoch20"
+  experiment_log_dir: "outputs/dlrsd_prompt_stage2_textlast1_from_stage1e20_1xA6000"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -13,6 +13,7 @@ paths:
   val_ann: "data/sam3_semantic_fixed/dlrsd/val.sam3.semantic.json"
 
   sam3_ckpt: "weights/sam3/sam3.pt"
+  stage1_resume_ckpt: "outputs/dlrsd_prompt_head_prompt_stage1_t05_1xA6000/checkpoints/checkpoint_20.pt"
 
 dlrsd_train:
   num_images: 8
@@ -23,9 +24,7 @@ dlrsd_train:
         - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
           query_filter:
             _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
-
         - _target_: sam3.train.transforms.segmentation.DecodeRle
-
         - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
           sizes:
             _target_: sam3.train.transforms.basic.get_random_resize_scales
@@ -37,17 +36,13 @@ dlrsd_train:
             size: ${scratch.resolution}
           square: true
           consistent_transform: ${scratch.consistent_transform}
-
         - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
           size: ${scratch.resolution}
           consistent_transform: ${scratch.consistent_transform}
-
         - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
-
         - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
           query_filter:
             _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
-
         - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
           mean: ${scratch.train_norm_mean}
           std: ${scratch.train_norm_std}
@@ -56,7 +51,6 @@ dlrsd_train:
     - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
       transforms:
         - _target_: sam3.train.transforms.segmentation.DecodeRle
-
         - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
           sizes: ${scratch.resolution}
           max_size:
@@ -64,15 +58,14 @@ dlrsd_train:
             size: ${scratch.resolution}
           square: true
           consistent_transform: false
-
         - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
-
         - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
           mean: ${scratch.val_norm_mean}
           std: ${scratch.val_norm_std}
 
   loss:
     _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+    calibration_thresholds: [0.5, 0.3, 0.4]
 
     loss_fn_semantic_seg:
       _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
@@ -111,7 +104,6 @@ scratch:
   val_norm_mean: [0.5, 0.5, 0.5]
   val_norm_std: [0.5, 0.5, 0.5]
 
-  # 关键修正：先彻底关闭多进程 dataloader，避免 NFS .nfs busy
   num_train_workers: 0
   num_val_workers: 0
 
@@ -119,22 +111,19 @@ scratch:
   context_length: 2
   gather_pred_via_filesys: false
 
-  # 关键修正：lr 降低，避免 soft prompt-only 中后期 spike
   lr_transformer: 1.0e-4
   lr_vision_backbone: 0.0
   lr_language_backbone: 0.0
   lrd_vision_backbone: 1.0
   wd: 0.0
 
-  scheduler_timescale: 20
+  scheduler_timescale: 400
   scheduler_warmup: 10
   scheduler_cooldown: 10
 
   gradient_accumulation_steps: 1
-
-  # 保持 batch=16，当前是比较好的甜点区
-  train_batch_size: 16
-  val_batch_size: 16
+  train_batch_size: 32
+  val_batch_size: 32
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -155,12 +144,16 @@ trainer:
   skip_saving_ckpts: False
   empty_gpu_mem_cache_after_eval: True
   skip_first_val: False
-  max_epochs: 20
+  max_epochs: 12
   accelerator: cuda
   seed_value: 1230
   val_epoch_freq: 1
   mode: train
   gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
+  env_variables:
+    SAM3_TEXT_UNFREEZE_PRESET: "text_last1"
+    SAM3_SOFT_PROMPT_LR: "1e-5"
+    SAM3_TEXT_LR: "1e-5"
 
   distributed:
     backend: nccl
@@ -255,6 +248,7 @@ trainer:
   checkpoint:
     save_dir: ${paths.experiment_log_dir}/checkpoints
     save_freq: 1
+    resume_from: ${paths.stage1_resume_ckpt}
 
   logging:
     tensorboard_writer:

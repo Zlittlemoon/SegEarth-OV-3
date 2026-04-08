@@ -1450,19 +1450,36 @@ class Trainer:
             ignore_missing_keys=self.checkpoint_conf.skip_saving_parameters,
         )
 
-        self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.loss.load_state_dict(checkpoint["loss"], strict=True)
-        self.epoch = checkpoint["epoch"]
-        self.steps = checkpoint["steps"]
-        self.ckpt_time_elapsed = checkpoint.get("time_elapsed")
+        try:
+            self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
+            self.loss.load_state_dict(checkpoint["loss"], strict=True)
+            self.epoch = checkpoint["epoch"]
+            self.steps = checkpoint["steps"]
+            self.ckpt_time_elapsed = checkpoint.get("time_elapsed")
 
-        if self.optim_conf.amp.enabled and "scaler" in checkpoint:
-            self.scaler.load_state_dict(checkpoint["scaler"])
+            if self.optim_conf.amp.enabled and "scaler" in checkpoint:
+                self.scaler.load_state_dict(checkpoint["scaler"])
 
-        self.best_meter_values = checkpoint.get("best_meter_values", {})
+            self.best_meter_values = checkpoint.get("best_meter_values", {})
 
-        if "train_dataset" in checkpoint and self.train_dataset is not None:
-            self.train_dataset.load_checkpoint_state(checkpoint["train_dataset"])
+            if "train_dataset" in checkpoint and self.train_dataset is not None:
+                self.train_dataset.load_checkpoint_state(checkpoint["train_dataset"])
+        except ValueError as e:
+            # Common when resuming from a checkpoint trained with a different
+            # trainable-parameter set / optimizer param-group layout.
+            msg = str(e)
+            if "parameter group" in msg and "optimizer" in msg:
+                logging.warning(
+                    "Optimizer state is incompatible with current trainable parameter groups. "
+                    "Falling back to model-only resume from checkpoint: %s",
+                    ckpt_path,
+                )
+                self.epoch = 0
+                self.steps = {Phase.TRAIN: 0, Phase.VAL: 0}
+                self.ckpt_time_elapsed = 0.0
+                self.best_meter_values = {}
+            else:
+                raise
 
     def is_intermediate_val_epoch(self, epoch):
         skip_epoch = self.skip_first_val and epoch == 0
