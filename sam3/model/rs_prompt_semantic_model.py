@@ -40,7 +40,7 @@ class RSPromptSemanticModel(nn.Module):
         self.prompt_tuning_mode = os.environ.get("SAM3_RS_PROMPT_TUNING", "soft").strip().lower()
         self.soft_prompt_len = int(os.environ.get("SAM3_RS_SOFT_PROMPT_LEN", "34"))
         self.prompt_dim = int(os.environ.get("SAM3_RS_PROMPT_DIM", "256"))
-        # Default to additive soft prompt (prompt + soft_prompt) to preserve text conditioning.
+        # Default to concat soft prompt ([prompt; soft_prompt]) to preserve text conditioning.
         self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "0") == "1"
 
         if self.prompt_tuning_mode == "soft":
@@ -242,9 +242,10 @@ class RSPromptSemanticModel(nn.Module):
 
         return self.sam3._get_dummy_prompt(num_prompts=num_prompts)
 
-    def _apply_prompt_tuning(self, prompt):
-        if self.soft_prompt is None:
-            return prompt
+    def _apply_prompt_tuning(self, prompt, prompt_mask=None):
+        soft_prompt_param = getattr(self, "soft_prompt", None)
+        if soft_prompt_param is None:
+            return prompt, prompt_mask
 
         if prompt.shape[-1] != self.prompt_dim:
             raise RuntimeError(
@@ -252,29 +253,40 @@ class RSPromptSemanticModel(nn.Module):
                 f"expected last dim={self.prompt_dim}"
             )
 
-        prompt_len = prompt.shape[0]
         batch_size = prompt.shape[1]
-        soft_len = self.soft_prompt.shape[0]
+        soft_len = soft_prompt_param.shape[0]
 
-        # 允许运行时 prompt 比 checkpoint 里的 soft_prompt 更短
-        if soft_len < prompt_len:
-            raise RuntimeError(
-                f"Soft prompt length mismatch: prompt.shape={tuple(prompt.shape)}, "
-                f"soft_prompt.shape={tuple(self.soft_prompt.shape)}. "
-                f"Checkpoint soft prompt is shorter than actual prompt."
-            )
+        # self.soft_prompt: [L_soft, 1, C]
+        soft_prompt = soft_prompt_param
 
-        # self.soft_prompt: [L, 1, C]
-        soft_prompt = self.soft_prompt[:prompt_len]  # [prompt_len, 1, C]
-
-        # 关键修复：扩到当前 batch 维，变成 [L, B, C]
+        # Expand to current batch: [L_soft, B, C]
         if soft_prompt.shape[1] != batch_size:
             soft_prompt = soft_prompt.expand(-1, batch_size, -1)
 
         if self.prompt_only:
-            return soft_prompt
+            tuned_prompt = soft_prompt
+            if prompt_mask is None:
+                tuned_mask = None
+            else:
+                tuned_mask = torch.zeros(
+                    (batch_size, soft_len),
+                    device=prompt_mask.device,
+                    dtype=prompt_mask.dtype,
+                )
+            return tuned_prompt, tuned_mask
 
-        return prompt + soft_prompt
+        # Concat prompt and soft_prompt along token dimension.
+        tuned_prompt = torch.cat([prompt, soft_prompt], dim=0)
+        if prompt_mask is None:
+            tuned_mask = None
+        else:
+            soft_mask = torch.zeros(
+                (batch_size, soft_len),
+                device=prompt_mask.device,
+                dtype=prompt_mask.dtype,
+            )
+            tuned_mask = torch.cat([prompt_mask, soft_mask], dim=1)
+        return tuned_prompt, tuned_mask
 
     def _print_trainable_summary_once(self):
         if hasattr(self, "_printed_trainable_summary") and self._printed_trainable_summary:
@@ -376,11 +388,15 @@ class RSPromptSemanticModel(nn.Module):
         )
 
         # 6) prompt tuning
-        prompt = self._apply_prompt_tuning(prompt)
+        prompt, prompt_mask = self._apply_prompt_tuning(prompt, prompt_mask)
 
         self._dbg(
             "[RSPromptSemanticModel] tuned prompt shape:",
             None if prompt is None else tuple(prompt.shape),
+        )
+        self._dbg(
+            "[RSPromptSemanticModel] tuned prompt_mask shape:",
+            None if prompt_mask is None else tuple(prompt_mask.shape),
         )
 
         # 7) encoder
@@ -440,3 +456,4 @@ class RSPromptSemanticModel(nn.Module):
             )
 
         return out
+
