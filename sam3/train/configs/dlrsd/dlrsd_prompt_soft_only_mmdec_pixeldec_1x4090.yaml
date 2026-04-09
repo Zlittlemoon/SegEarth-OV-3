@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_prompt_head_prompt_stage1_t05_1xA6000"
+  experiment_log_dir: "outputs/dlrsd_prompt_soft_only_mmdec_pixeldec_1x4090"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -112,7 +112,7 @@ scratch:
   val_norm_mean: [0.5, 0.5, 0.5]
   val_norm_std: [0.5, 0.5, 0.5]
 
-  # 鍏抽敭淇锛氬厛褰诲簳鍏抽棴澶氳繘绋?dataloader锛岄伩鍏?NFS .nfs busy
+
   num_train_workers: 0
   num_val_workers: 0
 
@@ -120,7 +120,7 @@ scratch:
   context_length: 2
   gather_pred_via_filesys: false
 
-  # 鍏抽敭淇锛歭r 闄嶄綆锛岄伩鍏?soft prompt-only 涓悗鏈?spike
+
   lr_transformer: 1.0e-4
   lr_vision_backbone: 0.0
   lr_language_backbone: 0.0
@@ -133,8 +133,9 @@ scratch:
 
   gradient_accumulation_steps: 1
 
-  # 淇濇寔 batch=16锛屽綋鍓嶆槸姣旇緝濂界殑鐢滅偣鍖?  train_batch_size: 32
-  val_batch_size: 32
+
+  train_batch_size: 16
+  val_batch_size: 16
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -162,9 +163,11 @@ trainer:
   mode: train
   gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
   env_variables:
-    SAM3_TEXT_UNFREEZE_PRESET: "head_prompt"
+    SAM3_TEXT_UNFREEZE_PRESET: "soft_only_mmdec_pixeldec"
     SAM3_SOFT_PROMPT_LR: "5e-5"
-    SAM3_HEAD_LR: "5e-5"
+    SAM3_RS_SOFT_PROMPT_POS: "post_concat"
+    SAM3_MM_DECODER_LR: "1e-5"
+    SAM3_PIXEL_DECODER_LR: "1e-5"
 
   distributed:
     backend: nccl
@@ -286,5 +289,6 @@ submitit:
   use_cluster: False
   cpus_per_task: 8
   port_range: [10000, 65000]
+
 
 

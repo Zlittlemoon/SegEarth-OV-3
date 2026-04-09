@@ -46,7 +46,7 @@ class RSPromptSemanticModel(nn.Module):
                 f"Unknown SAM3_RS_SOFT_PROMPT_POS={self.soft_prompt_pos}. "
                 "Expected 'post_concat' or 'pre_text'."
             )
-        # Default to post_concat soft prompt ([prompt; soft_prompt]) to preserve text conditioning.
+        # Default to post mode soft prompt (residual add on prompt tokens) to preserve text conditioning.
         self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "0") == "1"
 
         if self.prompt_tuning_mode == "soft":
@@ -272,13 +272,20 @@ class RSPromptSemanticModel(nn.Module):
                 f"expected last dim={self.prompt_dim}"
             )
 
+        prompt_len = prompt.shape[0]
         batch_size = prompt.shape[1]
         soft_len = soft_prompt_param.shape[0]
+        if soft_len < prompt_len:
+            raise RuntimeError(
+                f"Soft prompt length mismatch: prompt.shape={tuple(prompt.shape)}, "
+                f"soft_prompt.shape={tuple(soft_prompt_param.shape)}. "
+                f"Need soft_len >= prompt_len for residual add."
+            )
 
-        # self.soft_prompt: [L_soft, 1, C]
-        soft_prompt = soft_prompt_param
+        # Match token length for residual add: [L_prompt, 1, C]
+        soft_prompt = soft_prompt_param[:prompt_len]
 
-        # Expand to current batch: [L_soft, B, C]
+        # Expand to current batch: [L_prompt, B, C]
         if soft_prompt.shape[1] != batch_size:
             soft_prompt = soft_prompt.expand(-1, batch_size, -1)
 
@@ -288,24 +295,15 @@ class RSPromptSemanticModel(nn.Module):
                 tuned_mask = None
             else:
                 tuned_mask = torch.zeros(
-                    (batch_size, soft_len),
+                    (batch_size, prompt_len),
                     device=prompt_mask.device,
                     dtype=prompt_mask.dtype,
                 )
             return tuned_prompt, tuned_mask
 
-        # Concat prompt and soft_prompt along token dimension.
-        tuned_prompt = torch.cat([prompt, soft_prompt], dim=0)
-        if prompt_mask is None:
-            tuned_mask = None
-        else:
-            soft_mask = torch.zeros(
-                (batch_size, soft_len),
-                device=prompt_mask.device,
-                dtype=prompt_mask.dtype,
-            )
-            tuned_mask = torch.cat([prompt_mask, soft_mask], dim=1)
-        return tuned_prompt, tuned_mask
+        # Residual add on prompt tokens.
+        tuned_prompt = prompt + soft_prompt
+        return tuned_prompt, prompt_mask
 
     def _build_pre_text_soft_prompt(self, batch_size: int):
         soft_prompt_param = getattr(self, "soft_prompt", None)

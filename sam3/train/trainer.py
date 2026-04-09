@@ -1087,6 +1087,14 @@ def _is_head_param(name: str) -> bool:
     return False
 
 
+def _is_multimodal_decoder_param(name: str) -> bool:
+    return name.startswith("sam3.transformer.decoder.")
+
+
+def _is_pixel_decoder_param(name: str) -> bool:
+    return name.startswith("sam3.segmentation_head.pixel_decoder.")
+
+
 def _set_lr_in_scheduler_cfg(scheduler_cfg: Dict[str, Any], lr_value: float) -> Dict[str, Any]:
     cfg = copy.deepcopy(scheduler_cfg)
     if "scheduler" not in cfg or cfg["scheduler"] is None:
@@ -1108,6 +1116,8 @@ def _set_lr_in_scheduler_cfg(scheduler_cfg: Dict[str, Any], lr_value: float) -> 
 def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
     soft_names = []
     text_names = []
+    mm_decoder_names = []
+    pixel_decoder_names = []
     head_names = []
     unexpected_names = []
     for name, p in model.named_parameters():
@@ -1117,11 +1127,22 @@ def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
             soft_names.append(name)
         elif _is_text_prompt_param(name):
             text_names.append(name)
+        elif _is_multimodal_decoder_param(name):
+            mm_decoder_names.append(name)
+        elif _is_pixel_decoder_param(name):
+            pixel_decoder_names.append(name)
         elif _is_head_param(name):
             head_names.append(name)
         else:
             unexpected_names.append(name)
-    return soft_names, text_names, head_names, unexpected_names
+    return (
+        soft_names,
+        text_names,
+        mm_decoder_names,
+        pixel_decoder_names,
+        head_names,
+        unexpected_names,
+    )
 
 class Trainer:
     """
@@ -2387,6 +2408,12 @@ class Trainer:
             elif preset == "head_prompt":
                 exact_names = set(soft_exact_names)
                 prefixes = ("sam3.segmentation_head.",)
+            elif preset in ("soft_only_mm_pixel", "soft_only_mmdec_pixeldec"):
+                exact_names = set(soft_exact_names)
+                prefixes = (
+                    "sam3.transformer.decoder.",
+                    "sam3.segmentation_head.pixel_decoder.",
+                )
             else:
                 supported = [
                     "soft_only",
@@ -2395,6 +2422,8 @@ class Trainer:
                     "text_last2",
                     "text_all6",
                     "head_prompt",
+                    "soft_only_mm_pixel",
+                    "soft_only_mmdec_pixeldec",
                 ]
                 raise ValueError(
                     f"Unknown preset: {preset}. Supported presets: {supported}"
@@ -2449,6 +2478,8 @@ class Trainer:
         # Safer default for soft-prompt tuning to reduce prompt drift / over-activation.
         soft_lr = float(os.getenv("SAM3_SOFT_PROMPT_LR", "5e-5"))
         text_lr = float(os.getenv("SAM3_TEXT_LR", "1e-5"))
+        mm_decoder_lr = float(os.getenv("SAM3_MM_DECODER_LR", str(text_lr)))
+        pixel_decoder_lr = float(os.getenv("SAM3_PIXEL_DECODER_LR", str(text_lr)))
         head_lr = float(os.getenv("SAM3_HEAD_LR", str(soft_lr)))
 
         if self.optim_conf.options is None:
@@ -2458,16 +2489,28 @@ class Trainer:
         if "lr" not in options_conf or options_conf["lr"] is None or len(options_conf["lr"]) == 0:
             raise KeyError("Optimizer options must contain a non-empty 'lr' config list.")
 
-        soft_names, text_names, head_names, unexpected_names = _collect_trainable_param_names_for_rs_tuning(self.model)
+        (
+            soft_names,
+            text_names,
+            mm_decoder_names,
+            pixel_decoder_names,
+            head_names,
+            unexpected_names,
+        ) = _collect_trainable_param_names_for_rs_tuning(self.model)
         if len(soft_names) == 0:
             raise RuntimeError("No trainable 'soft_prompt' parameter found.")
-        if len(text_names) == 0 and len(head_names) == 0:
+        if (
+            len(text_names) == 0
+            and len(mm_decoder_names) == 0
+            and len(pixel_decoder_names) == 0
+            and len(head_names) == 0
+        ):
             logging.warning(
-                "[TEXT-ONLY OPTIM] No trainable text/head-layer params matched; optimizer becomes soft-prompt-only."
+                "[RS OPTIM] No trainable text/mm-decoder/pixel-decoder/head params matched; optimizer becomes soft-prompt-only."
             )
         if len(unexpected_names) > 0:
             raise RuntimeError(
-                "[TEXT-ONLY OPTIM] Found trainable params outside soft/text/head groups:\n"
+                "[RS OPTIM] Found trainable params outside soft/text/mm-decoder/pixel-decoder/head groups:\n"
                 + "\n".join(unexpected_names[:200])
             )
 
@@ -2482,18 +2525,38 @@ class Trainer:
         else:
             options_conf["lr"] = [soft_lr_cfg]
 
+        if len(mm_decoder_names) > 0:
+            mm_decoder_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, mm_decoder_lr)
+            mm_decoder_lr_cfg["param_names"] = sorted(mm_decoder_names)
+            options_conf["lr"].append(mm_decoder_lr_cfg)
+
+        if len(pixel_decoder_names) > 0:
+            pixel_decoder_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, pixel_decoder_lr)
+            pixel_decoder_lr_cfg["param_names"] = sorted(pixel_decoder_names)
+            options_conf["lr"].append(pixel_decoder_lr_cfg)
+
         if len(head_names) > 0:
             head_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, head_lr)
             head_lr_cfg["param_names"] = sorted(head_names)
             options_conf["lr"].append(head_lr_cfg)
 
-        param_allowlist = set(soft_names) | set(text_names) | set(head_names)
-        logging.info("[TEXT-ONLY OPTIM] soft_prompt lr = %.8f", soft_lr)
-        logging.info("[TEXT-ONLY OPTIM] text-layer  lr = %.8f", text_lr)
-        logging.info("[TEXT-ONLY OPTIM] head-layer  lr = %.8f", head_lr)
-        logging.info("[TEXT-ONLY OPTIM] #soft tensors = %d", len(soft_names))
-        logging.info("[TEXT-ONLY OPTIM] #text tensors = %d", len(text_names))
-        logging.info("[TEXT-ONLY OPTIM] #head tensors = %d", len(head_names))
+        param_allowlist = (
+            set(soft_names)
+            | set(text_names)
+            | set(mm_decoder_names)
+            | set(pixel_decoder_names)
+            | set(head_names)
+        )
+        logging.info("[RS OPTIM] soft_prompt    lr = %.8f", soft_lr)
+        logging.info("[RS OPTIM] text-layer     lr = %.8f", text_lr)
+        logging.info("[RS OPTIM] mm-decoder     lr = %.8f", mm_decoder_lr)
+        logging.info("[RS OPTIM] pixel-decoder  lr = %.8f", pixel_decoder_lr)
+        logging.info("[RS OPTIM] head-layer     lr = %.8f", head_lr)
+        logging.info("[RS OPTIM] #soft tensors   = %d", len(soft_names))
+        logging.info("[RS OPTIM] #text tensors   = %d", len(text_names))
+        logging.info("[RS OPTIM] #mmdec tensors  = %d", len(mm_decoder_names))
+        logging.info("[RS OPTIM] #pixel tensors  = %d", len(pixel_decoder_names))
+        logging.info("[RS OPTIM] #head tensors   = %d", len(head_names))
 
         self.optim = construct_optimizer(
             self.model,

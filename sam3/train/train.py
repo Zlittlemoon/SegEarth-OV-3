@@ -11,7 +11,7 @@ from copy import deepcopy
 import submitit
 import torch
 
-from hydra import compose, initialize_config_module
+from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
 from iopath.common.file_io import g_pathmgr
@@ -139,7 +139,31 @@ def add_pythonpath_to_sys_path():
 
 
 def main(args) -> None:
-    cfg = compose(config_name=args.config)
+    cfg_raw = compose(config_name=args.config)
+    cfg = cfg_raw
+
+    # Robustly unwrap grouped configs (e.g. {"configs": {...}} / {"dlrsd": {...}})
+    # and keep parent-level `paths` available for interpolation.
+    #
+    # Important: if we just do `cfg = sub`, OmegaConf can keep interpolation
+    # resolution tied to the original parent root. When the original root is
+    # {"dlrsd": {...}}, `${paths.xxx}` inside `dlrsd.launcher` may fail because
+    # `paths` is not at that root level.
+    #
+    # We therefore re-create a detached config rooted at the selected subtree.
+    if "trainer" not in cfg or "launcher" not in cfg:
+        for _, sub in cfg_raw.items():
+            if hasattr(sub, "keys") and "trainer" in sub and "launcher" in sub:
+                cfg = OmegaConf.create(OmegaConf.to_container(sub, resolve=False))
+                break
+
+    if "paths" not in cfg and hasattr(cfg_raw, "keys") and "paths" in cfg_raw:
+        cfg = OmegaConf.create(
+            OmegaConf.to_container(
+                OmegaConf.merge({"paths": cfg_raw["paths"]}, cfg), resolve=False
+            )
+        )
+
     if cfg.launcher.experiment_log_dir is None:
         cfg.launcher.experiment_log_dir = os.path.join(
             os.getcwd(), "sam3_logs", args.config
@@ -314,7 +338,12 @@ def main(args) -> None:
 
 
 if __name__ == "__main__":
-    initialize_config_module("sam3.train", version_base="1.2")
+    config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "configs"))
+    # Hydra API changed argument name across versions (config_dir vs config_path).
+    try:
+        initialize_config_dir(config_dir=config_dir, version_base="1.2")
+    except TypeError:
+        initialize_config_dir(config_path=config_dir, version_base="1.2")
     parser = ArgumentParser()
     parser.add_argument(
         "-c",
