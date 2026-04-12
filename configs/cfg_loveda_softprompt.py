@@ -4,7 +4,7 @@ model = dict(
     classname_path='./configs/cls_loveda.txt',
     confidence_threshold=0.5,
     prob_thd=0.5,
-    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_1xA6000_test_epoch20_concat/checkpoints/checkpoint_20.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_prompt_soft_only_mmdec_pixeldec_1x4090/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 

@@ -126,6 +126,23 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
         if len(unexpected) > 0:
             print("[SOFT PROMPT LOAD] first unexpected:", unexpected[:20])
 
+    @staticmethod
+    def _extract_first_tensor(value, field_name: str):
+        """Accept Tensor or nested tuple/list and return the first Tensor found."""
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            return value
+        if isinstance(value, (tuple, list)):
+            for item in value:
+                tensor = SegEarthOV3SegmentationSoftPrompt._extract_first_tensor(item, field_name)
+                if tensor is not None:
+                    return tensor
+        raise TypeError(
+            f"{field_name} is expected to be a Tensor (or container with Tensor), "
+            f"but got type={type(value)}"
+        )
+
     def _forward_query_soft_prompt(self, inference_state, query_word: str, h: int, w: int):
         """
         Run one query with soft-prompt tuning active and return a state dict
@@ -148,7 +165,17 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             encode_text=True,
             prev_mask_pred=None,
         )
-        prompt = self.model._apply_prompt_tuning(prompt)
+        tuned_prompt = self.model._apply_prompt_tuning(prompt, prompt_mask)
+        if isinstance(tuned_prompt, tuple) and len(tuned_prompt) == 2:
+            prompt, prompt_mask = tuned_prompt
+        else:
+            # Backward compatibility if helper returns prompt only.
+            prompt = tuned_prompt
+
+        # Compatibility: some codepaths can wrap prompt/prompt_mask in tuple/list.
+        prompt = self._extract_first_tensor(prompt, "prompt")
+        prompt_mask = self._extract_first_tensor(prompt_mask, "prompt_mask")
+
         prompt = prompt.to(self.device)
         if prompt_mask is not None:
             prompt_mask = prompt_mask.to(self.device)
