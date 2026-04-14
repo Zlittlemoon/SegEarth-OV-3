@@ -2414,6 +2414,14 @@ class Trainer:
                     "sam3.transformer.decoder.",
                     "sam3.segmentation_head.pixel_decoder.",
                 )
+            elif preset in ("mm_pixel_only", "mmdec_pixeldec_only"):
+                # Train decoder + pixel decoder only, while excluding text-branch params
+                # inside decoder (e.g. .ca_text. / .catext_norm.).
+                exact_names = set()
+                prefixes = (
+                    "sam3.transformer.decoder.",
+                    "sam3.segmentation_head.pixel_decoder.",
+                )
             else:
                 supported = [
                     "soft_only",
@@ -2424,6 +2432,8 @@ class Trainer:
                     "head_prompt",
                     "soft_only_mm_pixel",
                     "soft_only_mmdec_pixeldec",
+                    "mm_pixel_only",
+                    "mmdec_pixeldec_only",
                 ]
                 raise ValueError(
                     f"Unknown preset: {preset}. Supported presets: {supported}"
@@ -2433,6 +2443,8 @@ class Trainer:
             trainable_numel = 0
             for name, p in model.named_parameters():
                 keep = (name in exact_names) or any(name.startswith(pr) for pr in prefixes)
+                if preset in ("mm_pixel_only", "mmdec_pixeldec_only") and _is_text_prompt_param(name):
+                    keep = False
                 if keep:
                     p.requires_grad = True
                     changed.append(name)
@@ -2497,8 +2509,16 @@ class Trainer:
             head_names,
             unexpected_names,
         ) = _collect_trainable_param_names_for_rs_tuning(self.model)
-        if len(soft_names) == 0:
-            raise RuntimeError("No trainable 'soft_prompt' parameter found.")
+        if (
+            len(soft_names) == 0
+            and len(text_names) == 0
+            and len(mm_decoder_names) == 0
+            and len(pixel_decoder_names) == 0
+            and len(head_names) == 0
+        ):
+            raise RuntimeError(
+                "[RS OPTIM] No trainable params matched any of: soft/text/mm-decoder/pixel-decoder/head."
+            )
         if (
             len(text_names) == 0
             and len(mm_decoder_names) == 0
@@ -2515,15 +2535,17 @@ class Trainer:
             )
 
         base_lr_cfg = copy.deepcopy(options_conf["lr"][0])
-        soft_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, soft_lr)
-        soft_lr_cfg["param_names"] = sorted(soft_names)
+        options_conf["lr"] = []
+
+        if len(soft_names) > 0:
+            soft_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, soft_lr)
+            soft_lr_cfg["param_names"] = sorted(soft_names)
+            options_conf["lr"].append(soft_lr_cfg)
 
         if len(text_names) > 0:
             text_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, text_lr)
             text_lr_cfg["param_names"] = sorted(text_names)
-            options_conf["lr"] = [soft_lr_cfg, text_lr_cfg]
-        else:
-            options_conf["lr"] = [soft_lr_cfg]
+            options_conf["lr"].append(text_lr_cfg)
 
         if len(mm_decoder_names) > 0:
             mm_decoder_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, mm_decoder_lr)
@@ -2539,6 +2561,9 @@ class Trainer:
             head_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, head_lr)
             head_lr_cfg["param_names"] = sorted(head_names)
             options_conf["lr"].append(head_lr_cfg)
+
+        if len(options_conf["lr"]) == 0:
+            raise RuntimeError("[RS OPTIM] No optimizer lr groups were created.")
 
         param_allowlist = (
             set(soft_names)

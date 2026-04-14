@@ -129,10 +129,10 @@ def main():
                     'Dataset': cfg.dataset_type})
 
     if runner.rank == 0:
-        append_experiment_result('results_OV3heads_softprompt_decoder_13_4M_epoch20.xlsx', [results])
+        append_experiment_result('results_OV3heads_mmdec_pixeldec_only_decoder_1xA6000_11_8M_epoch17_lr_1e-3.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results_OV3heads_softprompt_decoder_13_4M_epoch20.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results_OV3heads_mmdec_pixeldec_only_decoder_1xA6000_11_8M_epoch17_lr_1e-3.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')
