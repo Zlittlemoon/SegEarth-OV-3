@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3"
+  experiment_log_dir: "outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -84,8 +84,8 @@ dlrsd_train:
       focal_gamma: 2.0
       downsample: True
       weight_dict:
-        loss_semantic_seg: 20.0
-        loss_semantic_dice: 30.0
+        loss_semantic_seg: 1.0
+        loss_semantic_dice: 1.0
 
 scratch:
   enable_segmentation: True
@@ -101,7 +101,7 @@ scratch:
     gamma: 2.0
     stable: False
 
-  scale_by_find_batch_size: True
+  scale_by_find_batch_size: False
 
   resolution: 1008
   consistent_transform: False
@@ -287,4 +287,3 @@ submitit:
   use_cluster: False
   cpus_per_task: 8
   port_range: [10000, 65000]
-
