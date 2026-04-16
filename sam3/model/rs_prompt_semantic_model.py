@@ -469,25 +469,33 @@ class RSPromptSemanticModel(nn.Module):
         )
 
         if "semantic_seg" not in out:
-            raise KeyError(
-                f"Prompt semantic forward expected 'semantic_seg' in model output, "
-                f"but got keys={list(out.keys())}"
+            if "pred_masks" in out:
+                self._dbg(
+                    "[RSPromptSemanticModel] semantic_seg missing; pred_masks exists. "
+                    "This can be valid when semantic supervision is derived from instance masks."
+                )
+            else:
+                raise KeyError(
+                    "Prompt semantic forward expected at least one of ['semantic_seg', 'pred_masks'] "
+                    f"in model output, but got keys={list(out.keys())}"
+                )
+
+        if "semantic_seg" in out:
+            self._dbg(
+                "[RSPromptSemanticModel] semantic_seg shape:",
+                tuple(out["semantic_seg"].shape),
+            )
+            self._dbg(
+                "[RSPromptSemanticModel] semantic_seg requires_grad:",
+                out["semantic_seg"].requires_grad,
             )
 
-        self._dbg(
-            "[RSPromptSemanticModel] semantic_seg shape:",
-            tuple(out["semantic_seg"].shape),
-        )
-        self._dbg(
-            "[RSPromptSemanticModel] semantic_seg requires_grad:",
-            out["semantic_seg"].requires_grad,
-        )
-
-        if self.training and not out["semantic_seg"].requires_grad:
+        grad_anchor = out.get("semantic_seg", out.get("pred_masks", None))
+        if self.training and grad_anchor is not None and not grad_anchor.requires_grad:
             raise RuntimeError(
-                "semantic_seg does not require grad. "
-                "Most likely all parameters on the semantic segmentation path are frozen "
-                "or prompt tuning parameters were not registered correctly."
+                "Segmentation supervision anchor tensor does not require grad. "
+                "Most likely all parameters on the active segmentation path are frozen "
+                "or tuning parameters were not registered correctly."
             )
 
         return out

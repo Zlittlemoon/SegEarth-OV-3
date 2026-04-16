@@ -163,12 +163,8 @@ def _aggregate_instance_masks_max_logit(pred_masks: torch.Tensor) -> torch.Tenso
         return pred_masks.max(dim=1, keepdim=True).values
 
     if pred_masks.ndim == 3:
-        # Heuristic:
-        # - [Q, H, W] (single batch): aggregate over Q -> [1, 1, H, W]
-        # - [B, H, W] (already semantic-like): keep as [B, 1, H, W]
-        # We treat first dim as query when ambiguous and produce a singleton batch.
-        sem = pred_masks.max(dim=0, keepdim=True).values  # [1, H, W]
-        return sem.unsqueeze(1)  # [1, 1, H, W]
+        # Treat as already semantic-like logits [B, H, W].
+        return pred_masks.unsqueeze(1)
 
     if pred_masks.ndim == 2:
         return pred_masks.unsqueeze(0).unsqueeze(0)

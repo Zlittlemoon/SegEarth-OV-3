@@ -82,6 +82,42 @@ def _unwrap_stage_output(find_stages):
     raise TypeError(f"Cannot unwrap find_stages of type={type(find_stages)}")
 
 
+def _aggregate_instance_masks_max_logit_for_monitor(pred_masks: torch.Tensor) -> torch.Tensor:
+    if not torch.is_tensor(pred_masks):
+        raise TypeError(f"pred_masks should be a tensor, got {type(pred_masks)}")
+
+    if pred_masks.ndim == 4:
+        # [B, Q, H, W] -> [B, 1, H, W]
+        return pred_masks.max(dim=1, keepdim=True).values
+
+    if pred_masks.ndim == 3:
+        # Already semantic-like logits [B, H, W].
+        return pred_masks.unsqueeze(1)
+
+    if pred_masks.ndim == 2:
+        return pred_masks.unsqueeze(0).unsqueeze(0)
+
+    raise ValueError(
+        f"Unsupported pred_masks shape for monitor max-logit aggregation: {tuple(pred_masks.shape)}"
+    )
+
+
+def _resolve_semantic_logits_for_monitor(
+    out: Dict[str, Any], use_instance_max_logit_semantic: bool = False
+) -> torch.Tensor:
+    if use_instance_max_logit_semantic:
+        if "pred_masks" not in out:
+            raise KeyError(
+                "use_instance_max_logit_semantic=True requires 'pred_masks' in stage output, "
+                f"got keys={list(out.keys())}"
+            )
+        return _aggregate_instance_masks_max_logit_for_monitor(out["pred_masks"])
+
+    if "semantic_seg" not in out:
+        raise KeyError(f"semantic_seg not found, stage keys={list(out.keys())}")
+    return out["semantic_seg"]
+
+
 def _to_cpu(x):
     if torch.is_tensor(x):
         return x.detach().cpu()
@@ -733,7 +769,16 @@ def dump_trainable_params(model, save_dir):
                 break
 
 
-def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_items=8, ann_file=None, img_root=None):
+def save_first_batch_visuals(
+    batch,
+    find_stages,
+    find_targets,
+    save_dir,
+    max_items=8,
+    ann_file=None,
+    img_root=None,
+    use_instance_max_logit_semantic: bool = False,
+):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -751,10 +796,11 @@ def save_first_batch_visuals(batch, find_stages, find_targets, save_dir, max_ite
     object_ids = _try_get_object_ids(find_targets, batch)
 
     out = _unwrap_stage_output(find_stages)
-    if "semantic_seg" not in out:
-        raise KeyError(f"semantic_seg not found, stage keys={list(out.keys())}")
-
-    pred = _to_cpu(out["semantic_seg"]).float()
+    pred = _to_cpu(
+        _resolve_semantic_logits_for_monitor(
+            out, use_instance_max_logit_semantic=use_instance_max_logit_semantic
+        )
+    ).float()
 
     if not hasattr(batch, "img_batch"):
         raise AttributeError("batch has no img_batch; please inspect batch_structure.json")
@@ -1520,6 +1566,12 @@ class Trainer:
         ), f"Key {key} not found in losss, and no default provided"
         return self.loss["default"]
 
+    def _use_instance_max_logit_semantic_for_monitor(self) -> bool:
+        for loss_obj in self.loss.values():
+            if bool(getattr(loss_obj, "use_instance_max_logit_semantic", False)):
+                return True
+        return False
+
     def _find_meter(self, phase: str, key: str):
         if key in self.meters[phase]:
             return self.meters[phase][key]
@@ -1593,6 +1645,7 @@ class Trainer:
             debug_dir = os.path.join(self.logging_conf.log_dir, "debug_first_batch", debug_tag)
             debug_dataset = _get_dataset_for_phase(self, phase)
             ann_file, img_root = _discover_ann_file_and_img_root(debug_dataset)
+            loss_obj = self._find_loss(key)
             save_first_batch_visuals(
                 batch,
                 find_stages,
@@ -1601,6 +1654,9 @@ class Trainer:
                 max_items=8,
                 ann_file=ann_file,
                 img_root=img_root,
+                use_instance_max_logit_semantic=bool(
+                    getattr(loss_obj, "use_instance_max_logit_semantic", False)
+                ),
             )
             self.force_debug_visual_once = False
 
@@ -2172,11 +2228,10 @@ class Trainer:
                     ]
 
                     eval_out = _unwrap_stage_output(eval_find_stages)
-                    if "semantic_seg" not in eval_out:
-                        print("[DEBUG][post-step eval] semantic_seg not found")
-                        return
-
-                    pred = eval_out["semantic_seg"].float()
+                    pred = _resolve_semantic_logits_for_monitor(
+                        eval_out,
+                        use_instance_max_logit_semantic=self._use_instance_max_logit_semantic_for_monitor(),
+                    ).float()
                     pred_prob_288 = pred.sigmoid()
                     pred_bin_288 = pred_prob_288 > 0.5
 
