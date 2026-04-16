@@ -149,12 +149,42 @@ def _compute_prob_distribution(prob: torch.Tensor) -> Dict[str, torch.Tensor]:
     }
 
 
+def _aggregate_instance_masks_max_logit(pred_masks: torch.Tensor) -> torch.Tensor:
+    """
+    Aggregate instance logits into semantic logits using max over query dimension.
+
+    Expected common input shape is [B, Q, H, W]. The output is [B, 1, H, W].
+    """
+    if not torch.is_tensor(pred_masks):
+        raise TypeError(f"pred_masks should be a tensor, got {type(pred_masks)}")
+
+    if pred_masks.ndim == 4:
+        # [B, Q, H, W] -> [B, 1, H, W]
+        return pred_masks.max(dim=1, keepdim=True).values
+
+    if pred_masks.ndim == 3:
+        # Heuristic:
+        # - [Q, H, W] (single batch): aggregate over Q -> [1, 1, H, W]
+        # - [B, H, W] (already semantic-like): keep as [B, 1, H, W]
+        # We treat first dim as query when ambiguous and produce a singleton batch.
+        sem = pred_masks.max(dim=0, keepdim=True).values  # [1, H, W]
+        return sem.unsqueeze(1)  # [1, 1, H, W]
+
+    if pred_masks.ndim == 2:
+        return pred_masks.unsqueeze(0).unsqueeze(0)
+
+    raise ValueError(
+        f"Unsupported pred_masks shape for max-logit aggregation: {tuple(pred_masks.shape)}"
+    )
+
+
 class RSSemanticOnlyLoss(nn.Module):
     def __init__(
         self,
         loss_fn_semantic_seg: nn.Module,
         log_prefix: str = "sem",
         calibration_thresholds: Sequence[float] = (0.3, 0.4, 0.5),
+        use_instance_max_logit_semantic: bool = False,
     ) -> None:
         super().__init__()
         self.loss_fn_semantic_seg = loss_fn_semantic_seg
@@ -163,6 +193,7 @@ class RSSemanticOnlyLoss(nn.Module):
         self._debug_print_limit = 5
         self._debug_context = None
         self.calibration_thresholds = tuple(float(x) for x in calibration_thresholds)
+        self.use_instance_max_logit_semantic = bool(use_instance_max_logit_semantic)
 
     def forward(self, outputs: Any, targets: Any, *args, **kwargs) -> Dict[str, torch.Tensor]:
         return self.compute_loss(outputs, targets)
@@ -410,14 +441,25 @@ class RSSemanticOnlyLoss(nn.Module):
 
     def compute_loss(self, outputs: Any, targets: Any) -> Dict[str, torch.Tensor]:
         outputs = self._unwrap_outputs(outputs)
+        outputs_for_loss = dict(outputs)
 
-        if "semantic_seg" not in outputs:
-            raise KeyError(
-                f"RSSemanticOnlyLoss expects 'semantic_seg' in outputs, got keys={list(outputs.keys())}"
+        if self.use_instance_max_logit_semantic:
+            if "pred_masks" not in outputs_for_loss:
+                raise KeyError(
+                    "use_instance_max_logit_semantic=True requires 'pred_masks' in outputs, "
+                    f"got keys={list(outputs_for_loss.keys())}"
+                )
+            outputs_for_loss["semantic_seg"] = _aggregate_instance_masks_max_logit(
+                outputs_for_loss["pred_masks"]
             )
 
-        device = outputs["semantic_seg"].device
-        pred = outputs["semantic_seg"]
+        if "semantic_seg" not in outputs_for_loss:
+            raise KeyError(
+                f"RSSemanticOnlyLoss expects 'semantic_seg' in outputs, got keys={list(outputs_for_loss.keys())}"
+            )
+
+        device = outputs_for_loss["semantic_seg"].device
+        pred = outputs_for_loss["semantic_seg"]
         pred_hw = tuple(pred.shape[-2:])
 
         ctx = getattr(self, "_debug_context", None)
@@ -445,7 +487,7 @@ class RSSemanticOnlyLoss(nn.Module):
             if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
                 print("[DEBUG] collated num_boxes[:8] =", targets["num_boxes"].detach().cpu().view(-1)[:8].tolist())
 
-        targets = _align_semantic_targets_to_pred_batch(outputs, targets)
+        targets = _align_semantic_targets_to_pred_batch(outputs_for_loss, targets)
 
         if should_debug:
             print("\n[DEBUG][RSSemanticOnlyLoss][AFTER _align_semantic_targets_to_pred_batch]")
@@ -486,7 +528,7 @@ class RSSemanticOnlyLoss(nn.Module):
         loss_targets["semantic_masks"] = semantic_targets_288
         loss_targets["masks"] = semantic_targets_288
 
-        loss_dict = self.loss_fn_semantic_seg(outputs, loss_targets)
+        loss_dict = self.loss_fn_semantic_seg(outputs_for_loss, loss_targets)
 
         with torch.no_grad():
             pred_prob_288 = pred.float().sigmoid()
@@ -596,6 +638,6 @@ class RSSemanticOnlyLoss(nn.Module):
             cleaned[k] = v if torch.is_tensor(v) else torch.as_tensor(v, device=device)
 
         if len(cleaned) == 0:
-            cleaned[f"{self.log_prefix}_zero"] = outputs["semantic_seg"].sum() * 0.0
+            cleaned[f"{self.log_prefix}_zero"] = outputs_for_loss["semantic_seg"].sum() * 0.0
 
         return cleaned
