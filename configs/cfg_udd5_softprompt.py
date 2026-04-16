@@ -6,7 +6,7 @@ model = dict(
     confidence_threshold=0.5,
     prob_thd=0.1,
     bg_idx=4,
-    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1/checkpoints/checkpoint_14.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 

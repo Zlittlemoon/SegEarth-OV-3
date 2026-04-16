@@ -7,7 +7,7 @@ model = dict(
     confidence_threshold=0.2,
     bg_idx=5,
     # Optional override (base_config_softprompt.py already defines one).
-    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1/checkpoints/checkpoint_14.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 

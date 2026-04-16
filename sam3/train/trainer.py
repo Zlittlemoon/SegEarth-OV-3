@@ -2422,6 +2422,14 @@ class Trainer:
                     "sam3.transformer.decoder.",
                     "sam3.segmentation_head.pixel_decoder.",
                 )
+            elif preset in ("mm_pixel_head_only", "mmdec_pixeldec_head_only"):
+                # Train decoder + full segmentation head (including pixel decoder),
+                # while excluding text-branch params inside decoder.
+                exact_names = set()
+                prefixes = (
+                    "sam3.transformer.decoder.",
+                    "sam3.segmentation_head.",
+                )
             else:
                 supported = [
                     "soft_only",
@@ -2434,6 +2442,8 @@ class Trainer:
                     "soft_only_mmdec_pixeldec",
                     "mm_pixel_only",
                     "mmdec_pixeldec_only",
+                    "mm_pixel_head_only",
+                    "mmdec_pixeldec_head_only",
                 ]
                 raise ValueError(
                     f"Unknown preset: {preset}. Supported presets: {supported}"
@@ -2443,7 +2453,12 @@ class Trainer:
             trainable_numel = 0
             for name, p in model.named_parameters():
                 keep = (name in exact_names) or any(name.startswith(pr) for pr in prefixes)
-                if preset in ("mm_pixel_only", "mmdec_pixeldec_only") and _is_text_prompt_param(name):
+                if preset in (
+                    "mm_pixel_only",
+                    "mmdec_pixeldec_only",
+                    "mm_pixel_head_only",
+                    "mmdec_pixeldec_head_only",
+                ) and _is_text_prompt_param(name):
                     keep = False
                 if keep:
                     p.requires_grad = True
