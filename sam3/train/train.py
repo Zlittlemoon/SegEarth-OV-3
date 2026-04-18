@@ -330,6 +330,28 @@ def main(args) -> None:
             runner.setup_job_info(job.job_id, rank=0)
 
     else:
+        # Local mode: if user did not explicitly request --num-gpus and config keeps
+        # a single-process default, auto-upgrade to all visible GPUs so one config
+        # can run both single-GPU and multi-GPU without manual edits.
+        if args.num_gpus is None and torch.cuda.is_available():
+            visible_gpus = torch.cuda.device_count()
+            if visible_gpus > 1 and int(cfg.launcher.gpus_per_node) == 1:
+                logging.info(
+                    "Local auto multi-GPU enabled: launcher.gpus_per_node %d -> %d",
+                    int(cfg.launcher.gpus_per_node),
+                    visible_gpus,
+                )
+                cfg.launcher.gpus_per_node = visible_gpus
+
+        if torch.cuda.is_available():
+            available_gpus = torch.cuda.device_count()
+            requested_gpus = int(cfg.launcher.gpus_per_node)
+            if requested_gpus > available_gpus:
+                raise ValueError(
+                    f"Requested gpus_per_node={requested_gpus}, but only "
+                    f"{available_gpus} CUDA devices are visible."
+                )
+
         cfg.launcher.num_nodes = 1
         main_port = random.randint(
             submitit_conf.port_range[0], submitit_conf.port_range[1]

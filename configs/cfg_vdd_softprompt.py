@@ -5,7 +5,7 @@ model = dict(
     classname_path='./configs/cls_vdd.txt',
     prob_thd=0.3,
     confidence_threshold=0.5,
-    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_only_1xA6000_lr_1e-3_weight_1/checkpoints/checkpoint_20.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_head_only_1xA6000_lr_1e-5_weight_1_scheduler_timescale_3000/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 
