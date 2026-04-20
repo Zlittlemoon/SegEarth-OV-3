@@ -129,10 +129,10 @@ def main():
                     'Dataset': cfg.dataset_type})
 
     if runner.rank == 0:
-        append_experiment_result('results_OV3heads_mmdec_pixeldec__head_1xA6000_12_8M_epoch20_lr_1e-5_weight_1_scheduler_timescale_3000.xlsx', [results])
+        append_experiment_result('results_OV3heads_mmdec_pixeldec_head_text_soft_posttext_instance_maxlogit_14_4M_4x4090.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results_OV3heads_mmdec_pixeldec__head_1xA6000_12_8M_epoch20_lr_1e-5_weight_1_scheduler_timescale_3000.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results_OV3heads_mmdec_pixeldec_head_text_soft_posttext_instance_maxlogit_14_4M_4x4090.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')

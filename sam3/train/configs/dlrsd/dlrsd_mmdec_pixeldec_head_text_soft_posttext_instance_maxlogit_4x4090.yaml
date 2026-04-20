@@ -4,7 +4,7 @@ defaults:
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_mmdec_pixeldec_head_instance_maxlogit_1xA6000_lr_1e-5_gpu_1"
+  experiment_log_dir: "outputs/dlrsd_mmdec_pixeldec_head_text_soft16_posttext_instance_maxlogit_1xA6000_batch16"
 
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
@@ -128,15 +128,15 @@ scratch:
   lrd_vision_backbone: 1.0
   wd: 0.0
 
-  scheduler_timescale: 3000
+  scheduler_timescale: 400
   scheduler_warmup: 10
   scheduler_cooldown: 10
 
   gradient_accumulation_steps: 1
 
 
-  train_batch_size: 2
-  val_batch_size: 2
+  train_batch_size: 16
+  val_batch_size: 16
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -164,8 +164,13 @@ trainer:
   mode: train
   gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
   env_variables:
-    SAM3_TEXT_UNFREEZE_PRESET: "mmdec_pixeldec_head_only"
-    SAM3_SOFT_PROMPT_LR: "1e-5"
+    SAM3_TEXT_UNFREEZE_PRESET: "mmdec_pixeldec_head_text_all"
+    SAM3_RS_PROMPT_TUNING: "soft"
+    SAM3_RS_SOFT_PROMPT_POS: "post_text_add"
+    SAM3_RS_FORCE_DISABLE_ACT_CKPT: "1"
+    SAM3_RS_SOFT_PROMPT_LEN: "34"
+    SAM3_RS_PROMPT_DIM: "256"
+    SAM3_SOFT_PROMPT_LR: "1e-4"
     SAM3_TEXT_LR: "1e-5"
     SAM3_MM_DECODER_LR: "1e-5"
     SAM3_PIXEL_DECODER_LR: "1e-5"
@@ -279,7 +284,7 @@ trainer:
 
 launcher:
   num_nodes: 1
-  gpus_per_node: 1
+  gpus_per_node: 4
   experiment_log_dir: ${paths.experiment_log_dir}
   multiprocessing_context: forkserver
 

@@ -1,6 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
 import inspect
+import os
 from functools import wraps
 from typing import Callable, TypeVar, Union
 
@@ -48,6 +49,15 @@ def activation_ckpt_wrapper(module: Union[nn.Module, Callable]) -> Callable:
         *args, act_ckpt_enable: bool = True, use_reentrant: bool = False, **kwargs
     ):
         if act_ckpt_enable:
+            # Runtime overrides for checkpoint stability.
+            # Default to reentrant mode to avoid non-reentrant recompute mismatch
+            # errors on some SDPA/MHA paths under AMP+DDP.
+            env_use_reentrant = os.getenv("SAM3_ACT_CKPT_USE_REENTRANT", "1").strip()
+            if env_use_reentrant in {"1", "true", "True"}:
+                use_reentrant = True
+            elif env_use_reentrant in {"0", "false", "False"}:
+                use_reentrant = False
+
             if len(args) > 0:
                 raise ValueError(
                     "This wrapper expects keyword arguments only when `act_ckpt_enable=True`"
@@ -71,17 +81,42 @@ def activation_ckpt_wrapper(module: Union[nn.Module, Callable]) -> Callable:
                 ):  # Skip **kwargs parameter
                     raise ValueError(f"Missing positional argument: {p_name}")
 
-            # Scan remaining kwargs for torch.Tensor
-            remaining_keys = list(kwargs.keys())
-            for key in remaining_keys:
-                if isinstance(kwargs[key], torch.Tensor):
-                    # Remove the tensor from kwargs, assuming it's not required by the module.
-                    # If it is required, the module's signature should be modified to accept it as a positional or keyword argument.
-                    kwargs[key] = "_REMOVED_BY_ACT_CKPT_WRAPPER_"
+            # Always pass positional tensors to checkpoint API, and forward any
+            # leftover kwargs through a closure. This avoids reentrant checkpoint
+            # rejecting unexpected keyword arguments.
+            def _run_module(*inner_args):
+                return module(*inner_args, **kwargs)
 
-            ret = checkpoint.checkpoint(
-                module, *args, use_reentrant=use_reentrant, **kwargs
-            )
+            # Reentrant checkpoint requires at least one input tensor with
+            # requires_grad=True; otherwise outputs can become non-differentiable
+            # even when module parameters are trainable.
+            if use_reentrant:
+                has_grad_input = any(
+                    isinstance(x, torch.Tensor) and x.requires_grad for x in args
+                )
+                if not has_grad_input:
+                    return _run_module(*args)
+
+            # PyTorch non-reentrant checkpoint may hit `early_stop` assertions or
+            # recompute mismatch errors in some nested checkpoint/autocast/DDP paths.
+            # Keep a compatibility path for non-reentrant, but prefer reentrant above.
+            if not use_reentrant and hasattr(checkpoint, "set_checkpoint_early_stop"):
+                with checkpoint.set_checkpoint_early_stop(False):
+                    if "determinism_check" in inspect.signature(checkpoint.checkpoint).parameters:
+                        ret = checkpoint.checkpoint(
+                            _run_module,
+                            *args,
+                            use_reentrant=use_reentrant,
+                            determinism_check="none",
+                        )
+                    else:
+                        ret = checkpoint.checkpoint(
+                            _run_module, *args, use_reentrant=use_reentrant
+                        )
+            else:
+                ret = checkpoint.checkpoint(
+                    _run_module, *args, use_reentrant=use_reentrant
+                )
         else:
             ret = module(*args, **kwargs)
 

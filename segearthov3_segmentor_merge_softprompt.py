@@ -117,10 +117,54 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             nk = k[7:] if k.startswith("module.") else k
             cleaned[nk] = v
 
+        model_state = model.state_dict()
+        resized_keys = []
+        skipped_shape_keys = []
+
+        def _resize_tensor_to_shape(src: torch.Tensor, dst_shape):
+            out = src.new_zeros(dst_shape)
+            common_slices = tuple(slice(0, min(int(s), int(d))) for s, d in zip(src.shape, dst_shape))
+            out[common_slices] = src[common_slices]
+            return out
+
+        for k in list(cleaned.keys()):
+            if k not in model_state:
+                continue
+            ckpt_v = cleaned[k]
+            model_v = model_state[k]
+            if not torch.is_tensor(ckpt_v) or not torch.is_tensor(model_v):
+                continue
+            if tuple(ckpt_v.shape) == tuple(model_v.shape):
+                continue
+
+            # Soft prompt length can differ between training and inference envs.
+            # Keep overlap and pad remaining entries with current model init.
+            if k == "soft_prompt" and ckpt_v.ndim == model_v.ndim:
+                resized = _resize_tensor_to_shape(ckpt_v, model_v.shape).to(
+                    dtype=model_v.dtype
+                )
+                cleaned[k] = resized
+                resized_keys.append(
+                    f"{k}: ckpt{tuple(ckpt_v.shape)} -> model{tuple(model_v.shape)}"
+                )
+                continue
+
+            # For other mismatched tensors, skip loading that key.
+            skipped_shape_keys.append(
+                f"{k}: ckpt{tuple(ckpt_v.shape)} vs model{tuple(model_v.shape)}"
+            )
+            cleaned.pop(k, None)
+
         missing, unexpected = model.load_state_dict(cleaned, strict=False)
         print(f"[SOFT PROMPT LOAD] checkpoint={ckpt_path}")
         print(f"[SOFT PROMPT LOAD] missing keys   : {len(missing)}")
         print(f"[SOFT PROMPT LOAD] unexpected keys: {len(unexpected)}")
+        if len(resized_keys) > 0:
+            print(f"[SOFT PROMPT LOAD] resized keys  : {len(resized_keys)}")
+            print("[SOFT PROMPT LOAD] first resized :", resized_keys[:20])
+        if len(skipped_shape_keys) > 0:
+            print(f"[SOFT PROMPT LOAD] skipped shape : {len(skipped_shape_keys)}")
+            print("[SOFT PROMPT LOAD] first skipped :", skipped_shape_keys[:20])
         if len(missing) > 0:
             print("[SOFT PROMPT LOAD] first missing:", missing[:20])
         if len(unexpected) > 0:

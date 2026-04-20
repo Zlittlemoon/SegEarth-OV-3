@@ -127,9 +127,23 @@ class SegmentationHead(nn.Module):
 
             backbone_visual_feats[-1] = encoder_visual_embed
             if self.act_ckpt:
-                pixel_embed = checkpoint.checkpoint(
-                    self.pixel_decoder, backbone_visual_feats, use_reentrant=False
+                # Reentrant checkpoint requires at least one grad-requiring input;
+                # otherwise outputs may lose grad connectivity to trainable params.
+                has_grad_input = any(
+                    torch.is_tensor(x) and x.requires_grad for x in backbone_visual_feats
                 )
+                if has_grad_input:
+                    if hasattr(checkpoint, "set_checkpoint_early_stop"):
+                        with checkpoint.set_checkpoint_early_stop(False):
+                            pixel_embed = checkpoint.checkpoint(
+                                self.pixel_decoder, backbone_visual_feats, use_reentrant=False
+                            )
+                    else:
+                        pixel_embed = checkpoint.checkpoint(
+                            self.pixel_decoder, backbone_visual_feats, use_reentrant=False
+                        )
+                else:
+                    pixel_embed = self.pixel_decoder(backbone_visual_feats)
             else:
                 pixel_embed = self.pixel_decoder(backbone_visual_feats)
         else:

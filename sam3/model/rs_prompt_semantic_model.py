@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Any, Dict
 
@@ -41,10 +42,10 @@ class RSPromptSemanticModel(nn.Module):
         self.soft_prompt_len = int(os.environ.get("SAM3_RS_SOFT_PROMPT_LEN", "34"))
         self.prompt_dim = int(os.environ.get("SAM3_RS_PROMPT_DIM", "256"))
         self.soft_prompt_pos = os.environ.get("SAM3_RS_SOFT_PROMPT_POS", "post_concat").strip().lower()
-        if self.soft_prompt_pos not in {"post_concat", "pre_text"}:
+        if self.soft_prompt_pos not in {"post_concat", "pre_text", "post_text_add"}:
             raise ValueError(
                 f"Unknown SAM3_RS_SOFT_PROMPT_POS={self.soft_prompt_pos}. "
-                "Expected 'post_concat' or 'pre_text'."
+                "Expected 'post_concat', 'pre_text', or 'post_text_add'."
             )
         # Default to post mode soft prompt (residual add on prompt tokens) to preserve text conditioning.
         self.prompt_only = os.environ.get("SAM3_RS_PROMPT_ONLY", "0") == "1"
@@ -55,8 +56,17 @@ class RSPromptSemanticModel(nn.Module):
             )
             nn.init.normal_(self.soft_prompt, std=0.02)
             text_width = int(getattr(self.sam3.backbone.language_backbone.encoder, "width", self.prompt_dim))
-            if self.soft_prompt_pos == "pre_text" and text_width != self.prompt_dim:
-                self.soft_prompt_proj = nn.Linear(self.prompt_dim, text_width, bias=False)
+            post_text_width = int(
+                getattr(getattr(self.sam3.backbone.language_backbone, "resizer", None), "out_features", self.prompt_dim)
+            )
+            if self.soft_prompt_pos == "pre_text":
+                target_width = text_width
+            elif self.soft_prompt_pos == "post_text_add":
+                target_width = post_text_width
+            else:
+                target_width = self.prompt_dim
+            if target_width != self.prompt_dim:
+                self.soft_prompt_proj = nn.Linear(self.prompt_dim, target_width, bias=False)
             else:
                 self.soft_prompt_proj = None
 
@@ -316,6 +326,65 @@ class RSPromptSemanticModel(nn.Module):
             soft_prompt = self.soft_prompt_proj(soft_prompt)
         return soft_prompt
 
+    def _build_post_text_soft_prompt(
+        self,
+        batch_size: int,
+        target_len: int,
+        target_dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ):
+        soft_prompt_param = getattr(self, "soft_prompt", None)
+        if soft_prompt_param is None:
+            return None
+
+        soft_prompt = soft_prompt_param
+        if soft_prompt.shape[1] != batch_size:
+            soft_prompt = soft_prompt.expand(-1, batch_size, -1)
+        if hasattr(self, "soft_prompt_proj") and self.soft_prompt_proj is not None:
+            soft_prompt = self.soft_prompt_proj(soft_prompt)
+
+        if soft_prompt.shape[2] != target_dim:
+            raise RuntimeError(
+                f"Post-text soft prompt dim mismatch: got {soft_prompt.shape[2]}, expected {target_dim}"
+            )
+
+        tuned_soft = torch.zeros(
+            (target_len, batch_size, target_dim),
+            device=device,
+            dtype=dtype,
+        )
+        copy_len = min(int(soft_prompt.shape[0]), int(target_len))
+        if copy_len > 0:
+            tuned_soft[:copy_len] = soft_prompt[:copy_len].to(device=device, dtype=dtype)
+        return tuned_soft
+
+    def _apply_post_text_soft_prompt(self, text_outputs: Dict[str, torch.Tensor]):
+        language_features = text_outputs.get("language_features", None)
+        if language_features is None:
+            raise KeyError("language_features missing in text outputs for post_text_add soft prompt.")
+
+        if language_features.ndim != 3:
+            raise RuntimeError(
+                f"language_features should be [L, B, C], got {tuple(language_features.shape)}"
+            )
+
+        soft_prompt = self._build_post_text_soft_prompt(
+            batch_size=int(language_features.shape[1]),
+            target_len=int(language_features.shape[0]),
+            target_dim=int(language_features.shape[2]),
+            device=language_features.device,
+            dtype=language_features.dtype,
+        )
+        if soft_prompt is None:
+            return text_outputs
+
+        if self.prompt_only:
+            text_outputs["language_features"] = soft_prompt
+        else:
+            text_outputs["language_features"] = language_features + soft_prompt
+        return text_outputs
+
     def _print_trainable_summary_once(self):
         if hasattr(self, "_printed_trainable_summary") and self._printed_trainable_summary:
             return
@@ -339,6 +408,83 @@ class RSPromptSemanticModel(nn.Module):
             print(f"[RSPromptSemanticModel] ... and {len(names) - 50} more trainable params")
 
         self._printed_trainable_summary = True
+
+    def _has_trainable_seg_path_params(self) -> bool:
+        seg_prefixes = (
+            "sam3.transformer.decoder.",
+            "sam3.segmentation_head.",
+        )
+        for n, p in self.named_parameters():
+            if any(n.startswith(pr) for pr in seg_prefixes) and p.requires_grad:
+                return True
+        return False
+
+    @staticmethod
+    def _anchor_requires_grad(out: Dict[str, torch.Tensor]) -> bool:
+        sem = out.get("semantic_seg", None)
+        ins = out.get("pred_masks", None)
+        sem_grad = bool(torch.is_tensor(sem) and sem.requires_grad)
+        ins_grad = bool(torch.is_tensor(ins) and ins.requires_grad)
+        return sem_grad or ins_grad
+
+    def _rerun_decoder_and_heads_without_act_ckpt(
+        self,
+        out: Dict[str, torch.Tensor],
+        hs,
+        backbone_out,
+        encoder_out,
+        find_input,
+    ) -> Dict[str, torch.Tensor]:
+        decoder = getattr(self.sam3, "transformer", None)
+        decoder = getattr(decoder, "decoder", None)
+        seg_head = getattr(self.sam3, "segmentation_head", None)
+
+        prev_decoder_ckpt = getattr(decoder, "use_act_checkpoint", None)
+        prev_seg_ckpt = getattr(self.sam3, "use_act_checkpoint_seg_head", None)
+        prev_seg_head_ckpt = getattr(seg_head, "act_ckpt", None)
+
+        try:
+            if prev_decoder_ckpt is not None:
+                decoder.use_act_checkpoint = False
+            if prev_seg_ckpt is not None:
+                self.sam3.use_act_checkpoint_seg_head = False
+            if prev_seg_head_ckpt is not None:
+                seg_head.act_ckpt = False
+
+            grad_ctx = (
+                torch.set_grad_enabled(True)
+                if self.training and not torch.is_grad_enabled()
+                else contextlib.nullcontext()
+            )
+            with grad_ctx:
+                out = {}
+                out, hs = self.sam3._run_decoder(
+                    pos_embed=encoder_out["pos_embed"],
+                    memory=encoder_out["encoder_hidden_states"],
+                    src_mask=encoder_out["padding_mask"],
+                    out=out,
+                    prompt=encoder_out["prompt_after_enc"],
+                    prompt_mask=encoder_out["prompt_mask"],
+                    encoder_out=encoder_out,
+                )
+                self.sam3._run_segmentation_heads(
+                    out=out,
+                    backbone_out=backbone_out,
+                    img_ids=find_input.img_ids,
+                    vis_feat_sizes=encoder_out["vis_feat_sizes"],
+                    encoder_hidden_states=encoder_out["encoder_hidden_states"],
+                    prompt=encoder_out["prompt_after_enc"],
+                    prompt_mask=encoder_out["prompt_mask"],
+                    hs=hs,
+                )
+            return out
+        finally:
+            if prev_decoder_ckpt is not None:
+                decoder.use_act_checkpoint = prev_decoder_ckpt
+            if prev_seg_ckpt is not None:
+                self.sam3.use_act_checkpoint_seg_head = prev_seg_ckpt
+            if prev_seg_head_ckpt is not None:
+                seg_head.act_ckpt = prev_seg_head_ckpt
 
     def forward(self, batch: Any) -> Dict[str, torch.Tensor]:
         self._decide_debug_step()
@@ -381,6 +527,8 @@ class RSPromptSemanticModel(nn.Module):
             device=device,
             soft_prompt_embed=pre_text_soft_prompt,
         )
+        if self.soft_prompt_pos == "post_text_add":
+            text_outputs = self._apply_post_text_soft_prompt(text_outputs)
         backbone_out.update(text_outputs)
 
         # 4) official geometric prompt path
@@ -445,28 +593,62 @@ class RSPromptSemanticModel(nn.Module):
 
         out: Dict[str, Any] = {}
 
-        # 8) decoder
-        out, hs = self.sam3._run_decoder(
-            pos_embed=encoder_out["pos_embed"],
-            memory=encoder_out["encoder_hidden_states"],
-            src_mask=encoder_out["padding_mask"],
-            out=out,
-            prompt=encoder_out["prompt_after_enc"],
-            prompt_mask=encoder_out["prompt_mask"],
-            encoder_out=encoder_out,
-        )
+        # 8) decoder + 9) segmentation heads
+        force_disable_act_ckpt = os.environ.get("SAM3_RS_FORCE_DISABLE_ACT_CKPT", "0") in {
+            "1",
+            "true",
+            "True",
+        }
+        decoder = getattr(self.sam3, "transformer", None)
+        decoder = getattr(decoder, "decoder", None)
+        seg_head = getattr(self.sam3, "segmentation_head", None)
+        prev_decoder_ckpt = getattr(decoder, "use_act_checkpoint", None)
+        prev_seg_ckpt = getattr(self.sam3, "use_act_checkpoint_seg_head", None)
+        prev_seg_head_ckpt = getattr(seg_head, "act_ckpt", None)
 
-        # 9) segmentation heads
-        self.sam3._run_segmentation_heads(
-            out=out,
-            backbone_out=backbone_out,
-            img_ids=find_input.img_ids,
-            vis_feat_sizes=encoder_out["vis_feat_sizes"],
-            encoder_hidden_states=encoder_out["encoder_hidden_states"],
-            prompt=encoder_out["prompt_after_enc"],
-            prompt_mask=encoder_out["prompt_mask"],
-            hs=hs,
-        )
+        try:
+            if force_disable_act_ckpt:
+                if prev_decoder_ckpt is not None:
+                    decoder.use_act_checkpoint = False
+                if prev_seg_ckpt is not None:
+                    self.sam3.use_act_checkpoint_seg_head = False
+                if prev_seg_head_ckpt is not None:
+                    seg_head.act_ckpt = False
+
+            grad_ctx = (
+                torch.set_grad_enabled(True)
+                if self.training and not torch.is_grad_enabled()
+                else contextlib.nullcontext()
+            )
+            with grad_ctx:
+                out, hs = self.sam3._run_decoder(
+                    pos_embed=encoder_out["pos_embed"],
+                    memory=encoder_out["encoder_hidden_states"],
+                    src_mask=encoder_out["padding_mask"],
+                    out=out,
+                    prompt=encoder_out["prompt_after_enc"],
+                    prompt_mask=encoder_out["prompt_mask"],
+                    encoder_out=encoder_out,
+                )
+
+                self.sam3._run_segmentation_heads(
+                    out=out,
+                    backbone_out=backbone_out,
+                    img_ids=find_input.img_ids,
+                    vis_feat_sizes=encoder_out["vis_feat_sizes"],
+                    encoder_hidden_states=encoder_out["encoder_hidden_states"],
+                    prompt=encoder_out["prompt_after_enc"],
+                    prompt_mask=encoder_out["prompt_mask"],
+                    hs=hs,
+                )
+        finally:
+            if force_disable_act_ckpt:
+                if prev_decoder_ckpt is not None:
+                    decoder.use_act_checkpoint = prev_decoder_ckpt
+                if prev_seg_ckpt is not None:
+                    self.sam3.use_act_checkpoint_seg_head = prev_seg_ckpt
+                if prev_seg_head_ckpt is not None:
+                    seg_head.act_ckpt = prev_seg_head_ckpt
 
         if "semantic_seg" not in out:
             if "pred_masks" in out:
@@ -490,12 +672,44 @@ class RSPromptSemanticModel(nn.Module):
                 out["semantic_seg"].requires_grad,
             )
 
-        grad_anchor = out.get("semantic_seg", out.get("pred_masks", None))
+        semantic_anchor = out.get("semantic_seg", None)
+        instance_anchor = out.get("pred_masks", None)
+        grad_anchor = None
+        if semantic_anchor is not None and semantic_anchor.requires_grad:
+            grad_anchor = semantic_anchor
+        elif instance_anchor is not None and instance_anchor.requires_grad:
+            grad_anchor = instance_anchor
+        else:
+            grad_anchor = semantic_anchor if semantic_anchor is not None else instance_anchor
+
         if self.training and grad_anchor is not None and not grad_anchor.requires_grad:
-            raise RuntimeError(
-                "Segmentation supervision anchor tensor does not require grad. "
-                "Most likely all parameters on the active segmentation path are frozen "
-                "or tuning parameters were not registered correctly."
+            if self._has_trainable_seg_path_params():
+                # Fallback: some activation-checkpoint paths under DDP+AMP can
+                # break grad connectivity in this branch. Re-run decoder+heads
+                # once with activation checkpointing disabled.
+                out = self._rerun_decoder_and_heads_without_act_ckpt(
+                    out=out,
+                    hs=hs,
+                    backbone_out=backbone_out,
+                    encoder_out=encoder_out,
+                    find_input=find_input,
+                )
+                if self._anchor_requires_grad(out):
+                    return out
+
+                sem2 = out.get("semantic_seg", None)
+                ins2 = out.get("pred_masks", None)
+                sem_grad = bool(torch.is_tensor(sem2) and sem2.requires_grad)
+                ins_grad = bool(torch.is_tensor(ins2) and ins2.requires_grad)
+                raise RuntimeError(
+                    "Segmentation supervision anchor tensor does not require grad. "
+                    "Trainable params exist on decoder/segmentation head path, "
+                    "and fallback rerun without activation checkpointing still failed. "
+                    f"semantic_seg.requires_grad={sem_grad}, pred_masks.requires_grad={ins_grad}"
+                )
+            self._dbg(
+                "[RSPromptSemanticModel] segmentation anchor has no grad, "
+                "but no trainable decoder/seg-head params are enabled; skip strict check."
             )
 
         return out

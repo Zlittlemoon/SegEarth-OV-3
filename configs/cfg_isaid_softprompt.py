@@ -8,7 +8,7 @@ model = dict(
     slide_stride=512,
     slide_crop=512,
     # Optional override (already set in base_config_softprompt.py)
-    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_head_only_1xA6000_lr_1e-5_weight_1_scheduler_timescale_3000/checkpoints/checkpoint_20.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_mmdec_pixeldec_head_text_soft_posttext_instance_maxlogit_4x4090/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 

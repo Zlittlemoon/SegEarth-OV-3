@@ -2485,6 +2485,18 @@ class Trainer:
                     "sam3.transformer.decoder.",
                     "sam3.segmentation_head.",
                 )
+            elif preset in (
+                "mm_pixel_head_text",
+                "mmdec_pixeldec_head_text",
+                "mmdec_pixeldec_head_text_all",
+            ):
+                # Train decoder + full segmentation head (including pixel decoder)
+                # and keep text-related params (text projection + decoder text branch).
+                exact_names = set(soft_exact_names) | {text_proj_name}
+                prefixes = (
+                    "sam3.transformer.decoder.",
+                    "sam3.segmentation_head.",
+                )
             else:
                 supported = [
                     "soft_only",
@@ -2499,6 +2511,9 @@ class Trainer:
                     "mmdec_pixeldec_only",
                     "mm_pixel_head_only",
                     "mmdec_pixeldec_head_only",
+                    "mm_pixel_head_text",
+                    "mmdec_pixeldec_head_text",
+                    "mmdec_pixeldec_head_text_all",
                 ]
                 raise ValueError(
                     f"Unknown preset: {preset}. Supported presets: {supported}"
