@@ -79,10 +79,15 @@ class RSPromptSemanticModel(nn.Module):
                 nn.Linear(self.prompt_dim, self.prompt_dim),
             )
 
+        elif self.prompt_tuning_mode == "none":
+            # No prompt-tuning module is instantiated.
+            # This mode is used when training only decoder/seg-head paths.
+            pass
+
         else:
             raise ValueError(
                 f"Unknown SAM3_RS_PROMPT_TUNING={self.prompt_tuning_mode}. "
-                f"Expected 'soft' or 'mlp'."
+                f"Expected 'soft', 'mlp', or 'none'."
             )
 
         if self.prompt_only:

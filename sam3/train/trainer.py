@@ -578,13 +578,13 @@ def _try_get_prompt_boxes(batch):
     return None, None, None
 
 
-def _try_get_target_boxes_xywh(find_targets):
+def _try_get_target_boxes_xyxy(find_targets):
     if isinstance(find_targets, list) and len(find_targets) > 0 and isinstance(find_targets[0], dict):
         t0 = find_targets[0]
-        if "boxes" in t0 and torch.is_tensor(t0["boxes"]):
-            return _normalize_box_tensor(t0["boxes"]), "find_targets[0]['boxes']"
-        if "boxes_padded" in t0 and torch.is_tensor(t0["boxes_padded"]):
-            return _normalize_box_tensor(t0["boxes_padded"]), "find_targets[0]['boxes_padded']"
+        if "boxes_xyxy" in t0 and torch.is_tensor(t0["boxes_xyxy"]):
+            return _normalize_box_tensor(t0["boxes_xyxy"]), "find_targets[0]['boxes_xyxy']"
+        if "boxes_xyxy_padded" in t0 and torch.is_tensor(t0["boxes_xyxy_padded"]):
+            return _normalize_box_tensor(t0["boxes_xyxy_padded"]), "find_targets[0]['boxes_xyxy_padded']"
     return None, None
 
 
@@ -610,17 +610,54 @@ def _xywh_to_xyxy(box):
     return [x, y, x + w, y + h]
 
 
-def _scale_raw_json_xywh_to_current_image(raw_box, orig_size_hw, cur_h, cur_w):
+def _clip_box_xyxy(box_xyxy, h, w):
+    if box_xyxy is None:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in box_xyxy[:4]]
+    x1 = min(max(x1, 0.0), float(w))
+    y1 = min(max(y1, 0.0), float(h))
+    x2 = min(max(x2, 0.0), float(w))
+    y2 = min(max(y2, 0.0), float(h))
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    return [x1, y1, x2, y2]
+
+
+def _infer_content_xyxy_from_image(img_hwc: np.ndarray, eps: float = 1e-6):
+    if img_hwc is None or img_hwc.ndim != 3:
+        return None
+    mask = np.any(np.abs(img_hwc) > eps, axis=2)
+    ys, xs = np.where(mask)
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+    return [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
+
+
+def _scale_raw_json_xywh_to_current_image(raw_box, orig_size_hw, cur_h, cur_w, content_xyxy=None):
     if raw_box is None or orig_size_hw is None:
         return None
 
     box = torch.as_tensor(raw_box, dtype=torch.float32).view(-1, 4)[0].tolist()
     oh, ow = int(orig_size_hw[0]), int(orig_size_hw[1])
-    sx = float(cur_w) / float(ow)
-    sy = float(cur_h) / float(oh)
+
+    if content_xyxy is None:
+        dst_x1, dst_y1, dst_x2, dst_y2 = 0.0, 0.0, float(cur_w), float(cur_h)
+    else:
+        dst_x1, dst_y1, dst_x2, dst_y2 = [float(v) for v in content_xyxy[:4]]
+
+    dst_w = max(1.0, dst_x2 - dst_x1)
+    dst_h = max(1.0, dst_y2 - dst_y1)
 
     x, y, w, h = box
-    return [x * sx, y * sy, (x + w) * sx, (y + h) * sy]
+    out = [
+        dst_x1 + (x / float(ow)) * dst_w,
+        dst_y1 + (y / float(oh)) * dst_h,
+        dst_x1 + ((x + w) / float(ow)) * dst_w,
+        dst_y1 + ((y + h) / float(oh)) * dst_h,
+    ]
+    return _clip_box_xyxy(out, cur_h, cur_w)
 
 
 def _maybe_scale_norm_xyxy(box_xyxy, h, w):
@@ -628,8 +665,10 @@ def _maybe_scale_norm_xyxy(box_xyxy, h, w):
         return None
     x1, y1, x2, y2 = [float(v) for v in box_xyxy[:4]]
     if max(abs(x1), abs(y1), abs(x2), abs(y2)) <= 1.5:
-        return [x1 * w, y1 * h, x2 * w, y2 * h]
-    return [x1, y1, x2, y2]
+        out = [x1 * w, y1 * h, x2 * w, y2 * h]
+    else:
+        out = [x1, y1, x2, y2]
+    return _clip_box_xyxy(out, h, w)
 
 
 def _maybe_scale_norm_xywh(box_xywh, h, w):
@@ -641,7 +680,52 @@ def _maybe_scale_norm_xywh(box_xywh, h, w):
         y *= h
         bw *= w
         bh *= h
-    return [x, y, x + bw, y + bh]
+    return _clip_box_xyxy([x, y, x + bw, y + bh], h, w)
+
+
+def _maybe_scale_norm_cxcywh(box_cxcywh, h, w):
+    if box_cxcywh is None:
+        return None
+    cx, cy, bw, bh = [float(v) for v in box_cxcywh[:4]]
+    if max(abs(cx), abs(cy), abs(bw), abs(bh)) <= 1.5:
+        cx *= w
+        cy *= h
+        bw *= w
+        bh *= h
+    return _clip_box_xyxy([cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0], h, w)
+
+
+def _auto_box_to_xyxy(box_raw, h, w, preferred_format="xyxy"):
+    if box_raw is None:
+        return None
+
+    candidates = []
+    if preferred_format == "xyxy":
+        candidates = [
+            _maybe_scale_norm_xyxy(box_raw, h, w),
+            _maybe_scale_norm_xywh(box_raw, h, w),
+            _maybe_scale_norm_cxcywh(box_raw, h, w),
+        ]
+    elif preferred_format == "cxcywh":
+        candidates = [
+            _maybe_scale_norm_cxcywh(box_raw, h, w),
+            _maybe_scale_norm_xyxy(box_raw, h, w),
+            _maybe_scale_norm_xywh(box_raw, h, w),
+        ]
+    else:
+        candidates = [
+            _maybe_scale_norm_xywh(box_raw, h, w),
+            _maybe_scale_norm_xyxy(box_raw, h, w),
+            _maybe_scale_norm_cxcywh(box_raw, h, w),
+        ]
+
+    for cand in candidates:
+        if cand is None:
+            continue
+        x1, y1, x2, y2 = cand
+        if x2 >= x1 and y2 >= y1 and (x2 - x1) > 0 and (y2 - y1) > 0:
+            return cand
+    return candidates[0] if len(candidates) > 0 else None
 
 
 def _draw_xyxy(ax, box_xyxy, color, label, linestyle="-", linewidth=2):
@@ -824,7 +908,7 @@ def save_first_batch_visuals(
     texts = _try_get_texts(batch)
 
     prompt_boxes, prompt_box_masks, prompt_box_source = _try_get_prompt_boxes(batch)
-    target_boxes_xywh, target_box_source = _try_get_target_boxes_xywh(find_targets)
+    target_boxes_xyxy, target_box_source = _try_get_target_boxes_xyxy(find_targets)
     legacy_boxes, legacy_box_source = _try_get_boxes(batch, find_targets)
     original_sizes = _try_get_original_sizes(batch)
 
@@ -858,8 +942,8 @@ def save_first_batch_visuals(
 
     runtime_dump["normalized_prompt_boxes_shape"] = None if prompt_boxes is None else list(prompt_boxes.shape)
     runtime_dump["normalized_prompt_boxes_head"] = None if prompt_boxes is None else prompt_boxes[:4].tolist()
-    runtime_dump["normalized_target_boxes_shape"] = None if target_boxes_xywh is None else list(target_boxes_xywh.shape)
-    runtime_dump["normalized_target_boxes_head"] = None if target_boxes_xywh is None else target_boxes_xywh[:4].tolist()
+    runtime_dump["normalized_target_boxes_xyxy_shape"] = None if target_boxes_xyxy is None else list(target_boxes_xyxy.shape)
+    runtime_dump["normalized_target_boxes_xyxy_head"] = None if target_boxes_xyxy is None else target_boxes_xyxy[:4].tolist()
 
     with open(save_dir / "runtime_prompt_dump.json", "w", encoding="utf-8") as f:
         json.dump(runtime_dump, f, ensure_ascii=False, indent=2)
@@ -893,6 +977,7 @@ def save_first_batch_visuals(
         gti = gt[i].numpy()
         pbi = pred_bin[i].numpy()
         probi = prob_up[i, 0].numpy()
+        content_xyxy = _infer_content_xyxy_from_image(img)
 
         title_text = texts[i] if texts is not None and i < len(texts) else "<text not found in batch>"
         meta = _resolve_query_meta(
@@ -941,10 +1026,10 @@ def save_first_batch_visuals(
         cur_h, cur_w = img.shape[0], img.shape[1]
 
         prompt_box_raw = _pick_item_box(prompt_boxes, i, prompt_box_masks)
-        prompt_box_xyxy = _maybe_scale_norm_xywh(prompt_box_raw, cur_h, cur_w)
+        prompt_box_xyxy = _auto_box_to_xyxy(prompt_box_raw, cur_h, cur_w, preferred_format="xyxy")
 
-        target_box_raw = _pick_item_box(target_boxes_xywh, i, None)
-        target_box_xyxy = _maybe_scale_norm_xywh(target_box_raw, cur_h, cur_w)
+        target_box_raw = _pick_item_box(target_boxes_xyxy, i, None)
+        target_box_xyxy = _auto_box_to_xyxy(target_box_raw, cur_h, cur_w, preferred_format="xyxy")
 
         orig_size_hw = None
         if original_sizes is not None and i < len(original_sizes):
@@ -960,6 +1045,7 @@ def save_first_batch_visuals(
             orig_size_hw,
             cur_h,
             cur_w,
+            content_xyxy=content_xyxy,
         )
 
         fallback_ann_bbox = meta.get("first_ann_bbox")
@@ -968,14 +1054,18 @@ def save_first_batch_visuals(
             orig_size_hw,
             cur_h,
             cur_w,
+            content_xyxy=content_xyxy,
         )
 
         _draw_xyxy(axes[0], prompt_box_xyxy, color="lime", label="prompt_box(batch)", linestyle="-", linewidth=2)
-        _draw_xyxy(axes[0], target_box_xyxy, color="red", label="target_box(find_targets)", linestyle="-", linewidth=2)
-        _draw_xyxy(axes[0], json_box_xyxy, color="cyan", label="json_input_box(raw->scaled)", linestyle="--", linewidth=2)
+        _draw_xyxy(axes[0], target_box_xyxy, color="red", label="target_box(find_targets_xyxy)", linestyle="-", linewidth=2)
+        _draw_xyxy(axes[0], json_box_xyxy, color="cyan", label="json_input_box(raw->content)", linestyle="--", linewidth=2)
 
         if json_raw_input_box is None:
-            _draw_xyxy(axes[0], fallback_ann_xyxy, color="yellow", label="ann_bbox_fallback", linestyle="--", linewidth=2)
+            _draw_xyxy(axes[0], fallback_ann_xyxy, color="yellow", label="ann_bbox_fallback(raw->content)", linestyle="--", linewidth=2)
+
+        if content_xyxy is not None:
+            _draw_xyxy(axes[0], content_xyxy, color="white", label="content_bbox(nonpad)", linestyle=":", linewidth=1)
 
         handles, labels = axes[0].get_legend_handles_labels()
         if len(handles) > 0:
@@ -1005,6 +1095,7 @@ def save_first_batch_visuals(
                 "file_name": file_name,
                 "img_root": img_root,
                 "original_path": os.path.join(img_root, file_name) if (img_root is not None and file_name is not None) else None,
+                "content_xyxy": content_xyxy,
                 "prompt_box_source": prompt_box_source,
                 "target_box_source": target_box_source,
                 "prompt_box_raw": prompt_box_raw,
@@ -1133,6 +1224,54 @@ def _is_head_param(name: str) -> bool:
     return False
 
 
+def _is_instance_downstream_head_param(name: str) -> bool:
+    """
+    Instance-branch heads that are downstream of detector-decoder outputs.
+    Explicitly excludes pixel decoder and semantic head.
+    """
+    if not name.startswith("sam3.segmentation_head."):
+        return False
+    if name.startswith("sam3.segmentation_head.pixel_decoder."):
+        return False
+    if name.startswith("sam3.segmentation_head.semantic_seg_head."):
+        return False
+    return (
+        name.startswith("sam3.segmentation_head.mask_predictor.")
+        or name.startswith("sam3.segmentation_head.instance_seg_head.")
+        or name.startswith("sam3.segmentation_head.cross_attend_prompt.")
+        or name.startswith("sam3.segmentation_head.cross_attn_norm.")
+        or name.startswith("sam3.segmentation_head.presence_head.")
+    )
+
+
+def _is_presence_token_param(name: str) -> bool:
+    return (
+        name.startswith("sam3.transformer.decoder.presence_token.")
+        or name.startswith("sam3.transformer.decoder.presence_token_head.")
+        or name.startswith("sam3.transformer.decoder.presence_token_out_norm.")
+    )
+
+
+def _is_detector_param(name: str) -> bool:
+    return (
+        name.startswith("sam3.class_embed.")
+        or name.startswith("sam3.instance_class_embed.")
+        or name.startswith("sam3.dot_prod_scoring.")
+        or name.startswith("sam3.instance_dot_prod_scoring.")
+    )
+
+
+def _is_detector_decoder_param(name: str) -> bool:
+    # Detector decoder params are the decoder-owned detector heads/state
+    # excluding the multimodal decoder block stack (layers.*).
+    if not name.startswith("sam3.transformer.decoder."):
+        return False
+    sub = name[len("sam3.transformer.decoder.") :]
+    if sub.startswith("layers."):
+        return False
+    return True
+
+
 def _is_multimodal_decoder_param(name: str) -> bool:
     return name.startswith("sam3.transformer.decoder.")
 
@@ -1162,6 +1301,8 @@ def _set_lr_in_scheduler_cfg(scheduler_cfg: Dict[str, Any], lr_value: float) -> 
 def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
     soft_names = []
     text_names = []
+    detector_names = []
+    presence_names = []
     mm_decoder_names = []
     pixel_decoder_names = []
     head_names = []
@@ -1173,6 +1314,10 @@ def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
             soft_names.append(name)
         elif _is_text_prompt_param(name):
             text_names.append(name)
+        elif _is_detector_param(name):
+            detector_names.append(name)
+        elif _is_presence_token_param(name):
+            presence_names.append(name)
         elif _is_multimodal_decoder_param(name):
             mm_decoder_names.append(name)
         elif _is_pixel_decoder_param(name):
@@ -1184,6 +1329,8 @@ def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
     return (
         soft_names,
         text_names,
+        detector_names,
+        presence_names,
         mm_decoder_names,
         pixel_decoder_names,
         head_names,
@@ -2497,6 +2644,27 @@ class Trainer:
                     "sam3.transformer.decoder.",
                     "sam3.segmentation_head.",
                 )
+            elif preset in (
+                "detector_presence_only",
+                "detector_presence_token_only",
+                "detector_decoder_all_presence",
+                "detector_decoder_all_with_presence",
+            ):
+                # Presets are resolved in the keep-logic below.
+                exact_names = set()
+                prefixes = ()
+            elif preset in (
+                "mmdec_pixeldec_head_all_no_soft",
+                "detector_decoder_all_no_soft",
+            ):
+                # Train full detector decoder + full segmentation head,
+                # include text-branch params in decoder, and keep prompt-tuning
+                # modules frozen (no soft-prompt updates).
+                exact_names = {text_proj_name}
+                prefixes = (
+                    "sam3.transformer.decoder.",
+                    "sam3.segmentation_head.",
+                )
             else:
                 supported = [
                     "soft_only",
@@ -2514,6 +2682,12 @@ class Trainer:
                     "mm_pixel_head_text",
                     "mmdec_pixeldec_head_text",
                     "mmdec_pixeldec_head_text_all",
+                    "detector_presence_only",
+                    "detector_presence_token_only",
+                    "detector_decoder_all_presence",
+                    "detector_decoder_all_with_presence",
+                    "mmdec_pixeldec_head_all_no_soft",
+                    "detector_decoder_all_no_soft",
                 ]
                 raise ValueError(
                     f"Unknown preset: {preset}. Supported presets: {supported}"
@@ -2524,10 +2698,40 @@ class Trainer:
             for name, p in model.named_parameters():
                 keep = (name in exact_names) or any(name.startswith(pr) for pr in prefixes)
                 if preset in (
+                    "detector_presence_only",
+                    "detector_presence_token_only",
+                    "detector_decoder_all_presence",
+                    "detector_decoder_all_with_presence",
+                ):
+                    # detector_decoder_all_*:
+                    # detector-decoder-owned params (excluding decoder layers.*)
+                    # + presence-token branch + instance downstream heads.
+                    # Keep multimodal decoder block stack and pixel decoder frozen.
+                    if preset in (
+                        "detector_decoder_all_presence",
+                        "detector_decoder_all_with_presence",
+                    ):
+                        keep = (
+                            _is_detector_param(name)
+                            or _is_presence_token_param(name)
+                            or _is_detector_decoder_param(name)
+                            or _is_instance_downstream_head_param(name)
+                        )
+                    else:
+                        # detector_presence_*: detector heads + decoder-owned detector state
+                        # (excluding decoder layers.*) + presence-token branch only.
+                        keep = (
+                            _is_detector_param(name)
+                            or _is_presence_token_param(name)
+                            or _is_detector_decoder_param(name)
+                        )
+                if preset in (
                     "mm_pixel_only",
                     "mmdec_pixeldec_only",
                     "mm_pixel_head_only",
                     "mmdec_pixeldec_head_only",
+                    "detector_presence_only",
+                    "detector_presence_token_only",
                 ) and _is_text_prompt_param(name):
                     keep = False
                 if keep:
@@ -2575,6 +2779,8 @@ class Trainer:
         # Safer default for soft-prompt tuning to reduce prompt drift / over-activation.
         soft_lr = float(os.getenv("SAM3_SOFT_PROMPT_LR", "5e-5"))
         text_lr = float(os.getenv("SAM3_TEXT_LR", "1e-5"))
+        detector_lr = float(os.getenv("SAM3_DETECTOR_LR", str(text_lr)))
+        presence_lr = float(os.getenv("SAM3_PRESENCE_LR", str(text_lr)))
         mm_decoder_lr = float(os.getenv("SAM3_MM_DECODER_LR", str(text_lr)))
         pixel_decoder_lr = float(os.getenv("SAM3_PIXEL_DECODER_LR", str(text_lr)))
         head_lr = float(os.getenv("SAM3_HEAD_LR", str(soft_lr)))
@@ -2589,6 +2795,8 @@ class Trainer:
         (
             soft_names,
             text_names,
+            detector_names,
+            presence_names,
             mm_decoder_names,
             pixel_decoder_names,
             head_names,
@@ -2597,25 +2805,29 @@ class Trainer:
         if (
             len(soft_names) == 0
             and len(text_names) == 0
+            and len(detector_names) == 0
+            and len(presence_names) == 0
             and len(mm_decoder_names) == 0
             and len(pixel_decoder_names) == 0
             and len(head_names) == 0
         ):
             raise RuntimeError(
-                "[RS OPTIM] No trainable params matched any of: soft/text/mm-decoder/pixel-decoder/head."
+                "[RS OPTIM] No trainable params matched any of: soft/text/detector/presence/mm-decoder/pixel-decoder/head."
             )
         if (
             len(text_names) == 0
+            and len(detector_names) == 0
+            and len(presence_names) == 0
             and len(mm_decoder_names) == 0
             and len(pixel_decoder_names) == 0
             and len(head_names) == 0
         ):
             logging.warning(
-                "[RS OPTIM] No trainable text/mm-decoder/pixel-decoder/head params matched; optimizer becomes soft-prompt-only."
+                "[RS OPTIM] No trainable text/detector/presence/mm-decoder/pixel-decoder/head params matched; optimizer becomes soft-prompt-only."
             )
         if len(unexpected_names) > 0:
             raise RuntimeError(
-                "[RS OPTIM] Found trainable params outside soft/text/mm-decoder/pixel-decoder/head groups:\n"
+                "[RS OPTIM] Found trainable params outside soft/text/detector/presence/mm-decoder/pixel-decoder/head groups:\n"
                 + "\n".join(unexpected_names[:200])
             )
 
@@ -2631,6 +2843,16 @@ class Trainer:
             text_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, text_lr)
             text_lr_cfg["param_names"] = sorted(text_names)
             options_conf["lr"].append(text_lr_cfg)
+
+        if len(detector_names) > 0:
+            detector_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, detector_lr)
+            detector_lr_cfg["param_names"] = sorted(detector_names)
+            options_conf["lr"].append(detector_lr_cfg)
+
+        if len(presence_names) > 0:
+            presence_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, presence_lr)
+            presence_lr_cfg["param_names"] = sorted(presence_names)
+            options_conf["lr"].append(presence_lr_cfg)
 
         if len(mm_decoder_names) > 0:
             mm_decoder_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, mm_decoder_lr)
@@ -2653,17 +2875,23 @@ class Trainer:
         param_allowlist = (
             set(soft_names)
             | set(text_names)
+            | set(detector_names)
+            | set(presence_names)
             | set(mm_decoder_names)
             | set(pixel_decoder_names)
             | set(head_names)
         )
         logging.info("[RS OPTIM] soft_prompt    lr = %.8f", soft_lr)
         logging.info("[RS OPTIM] text-layer     lr = %.8f", text_lr)
+        logging.info("[RS OPTIM] detector       lr = %.8f", detector_lr)
+        logging.info("[RS OPTIM] presence       lr = %.8f", presence_lr)
         logging.info("[RS OPTIM] mm-decoder     lr = %.8f", mm_decoder_lr)
         logging.info("[RS OPTIM] pixel-decoder  lr = %.8f", pixel_decoder_lr)
         logging.info("[RS OPTIM] head-layer     lr = %.8f", head_lr)
         logging.info("[RS OPTIM] #soft tensors   = %d", len(soft_names))
         logging.info("[RS OPTIM] #text tensors   = %d", len(text_names))
+        logging.info("[RS OPTIM] #detector       = %d", len(detector_names))
+        logging.info("[RS OPTIM] #presence       = %d", len(presence_names))
         logging.info("[RS OPTIM] #mmdec tensors  = %d", len(mm_decoder_names))
         logging.info("[RS OPTIM] #pixel tensors  = %d", len(pixel_decoder_names))
         logging.info("[RS OPTIM] #head tensors   = %d", len(head_names))
