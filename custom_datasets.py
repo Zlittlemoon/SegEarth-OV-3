@@ -427,6 +427,38 @@ class UAVidDataset(BaseSegDataset):
 
 
 @DATASETS.register_module()
+class DLRSDDataset(BaseSegDataset):
+    """DLRSD dataset.
+
+    DLRSD semantic labels are usually encoded as:
+    - 0: ignore/background
+    - 1..17: valid semantic classes
+    """
+    METAINFO = dict(
+    classes=('airplane', 'bare soil', 'buildings', 'cars', 'chaparral',
+             'court', 'dock', 'field', 'grass', 'mobile home', 'pavement',
+             'sand', 'sea', 'ship', 'tanks', 'trees', 'water'),
+    palette=[[166, 202, 240], [128, 128, 0], [0, 0, 128], [255, 0, 0],
+             [0, 128, 0], [128, 0, 0], [255, 233, 233], [160, 160, 164],
+             [0, 128, 128], [90, 87, 255], [255, 255, 0], [255, 192, 0],
+             [0, 0, 255], [255, 0, 192], [128, 0, 128], [0, 255, 0],
+             [0, 255, 255]])
+
+    def __init__(self,
+                 img_suffix='.jpg',
+                 seg_map_suffix='.png',
+                 reduce_zero_label=True,
+                 ignore_index=255,
+                 **kwargs) -> None:
+        super().__init__(
+            img_suffix=img_suffix,
+            seg_map_suffix=seg_map_suffix,
+            reduce_zero_label=reduce_zero_label,
+            ignore_index=ignore_index,
+            **kwargs)
+
+
+@DATASETS.register_module()
 class UDD5Dataset(BaseSegDataset):
     """UDD5 dataset.
     

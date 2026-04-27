@@ -1,17 +1,14 @@
-﻿# @package _global_
+# @package _global_
 defaults:
   - _self_
 
 paths:
   bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
-  experiment_log_dir: "outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_visual_fixed_loss_fixed_1xA6000_lr_1e-5_batch16"
-
+  experiment_log_dir: "outputs/dlrsd_native_semantic_fit_trainset_1x3090_lr2e-5_batch4"
   train_img_dir: "data/DLRSD_split/train/imgs"
   val_img_dir: "data/DLRSD_split/val/imgs"
-
   train_ann: "data/sam3_semantic_fixed/dlrsd/train.sam3.semantic.json"
   val_ann: "data/sam3_semantic_fixed/dlrsd/val.sam3.semantic.json"
-
   sam3_ckpt: "weights/sam3/sam3.pt"
 
 dlrsd_train:
@@ -27,20 +24,12 @@ dlrsd_train:
         - _target_: sam3.train.transforms.segmentation.DecodeRle
 
         - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
-          sizes:
-            _target_: sam3.train.transforms.basic.get_random_resize_scales
-            size: ${scratch.resolution}
-            min_size: 256
-            rounded: false
+          sizes: ${scratch.resolution}
           max_size:
             _target_: sam3.train.transforms.basic.get_random_resize_max_size
             size: ${scratch.resolution}
           square: true
-          consistent_transform: ${scratch.consistent_transform}
-
-        - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
-          size: ${scratch.resolution}
-          consistent_transform: ${scratch.consistent_transform}
+          consistent_transform: false
 
         - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
 
@@ -74,13 +63,9 @@ dlrsd_train:
   loss:
     _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
     calibration_thresholds: [0.5, 0.3, 0.4]
-
-    # 推荐：先关掉 instance->semantic 主替代
-    aux_instance_semantic_weight: 0.15
+    aux_instance_semantic_weight: 0.0
     aux_instance_semantic_bce_weight: 1.0
     aux_instance_semantic_dice_weight: 1.0
-
-    # 一开始可以先设 0，等主训练稳定后再开
     consistency_weight: 0.0
     consistency_detach_instance: True
 
@@ -111,7 +96,6 @@ scratch:
     stable: False
 
   scale_by_find_batch_size: False
-
   resolution: 1008
   consistent_transform: False
   max_ann_per_img: 200
@@ -121,7 +105,6 @@ scratch:
   val_norm_mean: [0.5, 0.5, 0.5]
   val_norm_std: [0.5, 0.5, 0.5]
 
-
   num_train_workers: 0
   num_val_workers: 0
 
@@ -129,22 +112,20 @@ scratch:
   context_length: 2
   gather_pred_via_filesys: false
 
-
-  lr_transformer: 1.0e-5
+  lr_transformer: 2.0e-5
   lr_vision_backbone: 0.0
   lr_language_backbone: 0.0
   lrd_vision_backbone: 1.0
   wd: 0.0
 
   scheduler_timescale: 3000
-  scheduler_warmup: 10
-  scheduler_cooldown: 10
+  scheduler_warmup: 5
+  scheduler_cooldown: 5
 
   gradient_accumulation_steps: 1
 
-
-  train_batch_size: 16
-  val_batch_size: 16
+  train_batch_size: 4
+  val_batch_size: 4
 
   collate_fn:
     _target_: sam3.train.data.collator.collate_fn_api
@@ -165,17 +146,17 @@ trainer:
   skip_saving_ckpts: False
   empty_gpu_mem_cache_after_eval: True
   skip_first_val: False
-  max_epochs: 20
+  max_epochs: 50
   accelerator: cuda
   seed_value: 1230
   val_epoch_freq: 1
   mode: train
   gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
   env_variables:
-    SAM3_TEXT_UNFREEZE_PRESET: "detector_decoder_all_presence"
+    SAM3_TEXT_UNFREEZE_PRESET: "detector_decoder_all_no_soft"
     SAM3_RS_PROMPT_TUNING: "none"
-    SAM3_DETECTOR_LR: "1e-5"
-    SAM3_PRESENCE_LR: "1e-5"
+    SAM3_DETECTOR_LR: "2e-5"
+    SAM3_PRESENCE_LR: "2e-5"
 
   distributed:
     backend: nccl
@@ -257,7 +238,7 @@ trainer:
       lr:
         - scheduler:
             _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
-            base_lr: 1.0e-5
+            base_lr: 2.0e-5
             timescale: ${scratch.scheduler_timescale}
             warmup_steps: ${scratch.scheduler_warmup}
             cooldown_steps: ${scratch.scheduler_cooldown}
@@ -285,7 +266,7 @@ trainer:
 
 launcher:
   num_nodes: 1
-  gpus_per_node: 4
+  gpus_per_node: 1
   experiment_log_dir: ${paths.experiment_log_dir}
   multiprocessing_context: forkserver
 

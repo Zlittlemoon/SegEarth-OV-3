@@ -1,7 +1,6 @@
-
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Sequence
+from typing import Any, Dict, Sequence
 
 import torch
 import torch.nn as nn
@@ -94,29 +93,26 @@ def _compute_bin_iou(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.
 
 
 def _compute_bin_macc(pred_bin: torch.Tensor, target_bin: torch.Tensor) -> torch.Tensor:
-    """Binary mean class accuracy (mAcc) over foreground/background."""
     pred_bin = pred_bin.bool()
     target_bin = target_bin.bool()
 
     pred_flat = pred_bin.flatten(1)
     target_flat = target_bin.flatten(1)
 
-    # Foreground class accuracy: TP / GT_fg
     tp_fg = (pred_flat & target_flat).sum(dim=1).float()
     gt_fg = target_flat.sum(dim=1).float()
     acc_fg = tp_fg / torch.clamp(gt_fg, min=1.0)
     valid_fg = gt_fg > 0
 
-    # Background class accuracy: TN / GT_bg
     tp_bg = ((~pred_flat) & (~target_flat)).sum(dim=1).float()
     gt_bg = (~target_flat).sum(dim=1).float()
     acc_bg = tp_bg / torch.clamp(gt_bg, min=1.0)
     valid_bg = gt_bg > 0
 
     valid_count = valid_fg.float() + valid_bg.float()
-    per_sample_macc = (acc_fg * valid_fg.float() + acc_bg * valid_bg.float()) / torch.clamp(
-        valid_count, min=1.0
-    )
+    per_sample_macc = (
+        acc_fg * valid_fg.float() + acc_bg * valid_bg.float()
+    ) / torch.clamp(valid_count, min=1.0)
     return per_sample_macc.mean()
 
 
@@ -129,13 +125,11 @@ def _fg_ratio_per_sample(x: torch.Tensor):
 
 
 def _threshold_tag(th: float) -> str:
-    # 0.3 -> t03, 0.4 -> t04, 0.5 -> t05
     return f"t{int(round(float(th) * 10)):02d}"
 
 
 def _compute_prob_distribution(prob: torch.Tensor) -> Dict[str, torch.Tensor]:
     flat = prob.float().reshape(-1)
-    # torch.quantile on full 1008 maps can be expensive; sample deterministically when huge.
     if flat.numel() > 250000:
         stride = max(1, flat.numel() // 250000)
         flat = flat[::stride]
@@ -150,22 +144,13 @@ def _compute_prob_distribution(prob: torch.Tensor) -> Dict[str, torch.Tensor]:
 
 
 def _aggregate_instance_masks_max_logit(pred_masks: torch.Tensor) -> torch.Tensor:
-    """
-    Aggregate instance logits into semantic logits using max over query dimension.
-
-    Expected common input shape is [B, Q, H, W]. The output is [B, 1, H, W].
-    """
     if not torch.is_tensor(pred_masks):
         raise TypeError(f"pred_masks should be a tensor, got {type(pred_masks)}")
 
     if pred_masks.ndim == 4:
-        # [B, Q, H, W] -> [B, 1, H, W]
         return pred_masks.max(dim=1, keepdim=True).values
-
     if pred_masks.ndim == 3:
-        # Treat as already semantic-like logits [B, H, W].
         return pred_masks.unsqueeze(1)
-
     if pred_masks.ndim == 2:
         return pred_masks.unsqueeze(0).unsqueeze(0)
 
@@ -174,13 +159,33 @@ def _aggregate_instance_masks_max_logit(pred_masks: torch.Tensor) -> torch.Tenso
     )
 
 
+def _binary_dice_from_logits(
+    logits: torch.Tensor, target: torch.Tensor, eps: float = 1.0
+) -> torch.Tensor:
+    if target.ndim == 3:
+        target = target.unsqueeze(1)
+    target = target.float()
+
+    prob = logits.sigmoid().flatten(1)
+    target = target.flatten(1)
+
+    inter = 2.0 * (prob * target).sum(dim=1)
+    den = prob.sum(dim=1) + target.sum(dim=1)
+    dice = 1.0 - (inter + eps) / (den + eps)
+    return dice.mean()
+
+
 class RSSemanticOnlyLoss(nn.Module):
     def __init__(
         self,
         loss_fn_semantic_seg: nn.Module,
         log_prefix: str = "sem",
         calibration_thresholds: Sequence[float] = (0.3, 0.4, 0.5),
-        use_instance_max_logit_semantic: bool = False,
+        aux_instance_semantic_weight: float = 0.0,
+        aux_instance_semantic_bce_weight: float = 1.0,
+        aux_instance_semantic_dice_weight: float = 1.0,
+        consistency_weight: float = 0.0,
+        consistency_detach_instance: bool = True,
     ) -> None:
         super().__init__()
         self.loss_fn_semantic_seg = loss_fn_semantic_seg
@@ -189,7 +194,12 @@ class RSSemanticOnlyLoss(nn.Module):
         self._debug_print_limit = 5
         self._debug_context = None
         self.calibration_thresholds = tuple(float(x) for x in calibration_thresholds)
-        self.use_instance_max_logit_semantic = bool(use_instance_max_logit_semantic)
+
+        self.aux_instance_semantic_weight = float(aux_instance_semantic_weight)
+        self.aux_instance_semantic_bce_weight = float(aux_instance_semantic_bce_weight)
+        self.aux_instance_semantic_dice_weight = float(aux_instance_semantic_dice_weight)
+        self.consistency_weight = float(consistency_weight)
+        self.consistency_detach_instance = bool(consistency_detach_instance)
 
     def forward(self, outputs: Any, targets: Any, *args, **kwargs) -> Dict[str, torch.Tensor]:
         return self.compute_loss(outputs, targets)
@@ -204,7 +214,9 @@ class RSSemanticOnlyLoss(nn.Module):
                     raise ValueError("Last stage in SAM3Output is empty.")
                 last_item = last_item[-1]
             if not isinstance(last_item, dict):
-                raise TypeError(f"Expected last SAM3Output item to be dict, got {type(last_item)}")
+                raise TypeError(
+                    f"Expected last SAM3Output item to be dict, got {type(last_item)}"
+                )
             return last_item
 
         if isinstance(outputs, list):
@@ -216,7 +228,9 @@ class RSSemanticOnlyLoss(nn.Module):
                     raise ValueError("Last nested outputs list is empty.")
                 last_item = last_item[-1]
             if not isinstance(last_item, dict):
-                raise TypeError(f"Expected last outputs item to be dict, got {type(last_item)}")
+                raise TypeError(
+                    f"Expected last outputs item to be dict, got {type(last_item)}"
+                )
             return last_item
 
         if isinstance(outputs, dict):
@@ -242,8 +256,6 @@ class RSSemanticOnlyLoss(nn.Module):
                 masks = masks.to(device)
 
             if masks.numel() == 0:
-                # For all-negative batches, packed instance masks can be empty while
-                # semantic masks still have one map per query. Prefer semantic batch size.
                 if "semantic_masks" in targets and targets["semantic_masks"] is not None:
                     semantic_masks = targets["semantic_masks"]
                     if not torch.is_tensor(semantic_masks):
@@ -285,9 +297,13 @@ class RSSemanticOnlyLoss(nn.Module):
                 if num_boxes.numel() == masks.shape[0]:
                     out["num_boxes"] = num_boxes.view(-1).long()
                 else:
-                    out["num_boxes"] = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
+                    out["num_boxes"] = torch.ones(
+                        (masks.shape[0],), dtype=torch.long, device=device
+                    )
             else:
-                out["num_boxes"] = torch.ones((masks.shape[0],), dtype=torch.long, device=device)
+                out["num_boxes"] = torch.ones(
+                    (masks.shape[0],), dtype=torch.long, device=device
+                )
 
             if "semantic_masks" in targets and targets["semantic_masks"] is not None:
                 semantic_masks = targets["semantic_masks"]
@@ -310,15 +326,9 @@ class RSSemanticOnlyLoss(nn.Module):
                 if semantic_masks.shape[0] == 1 and masks.shape[0] > 1:
                     semantic_masks = semantic_masks.repeat(masks.shape[0], 1, 1)
                 elif semantic_masks.shape[0] != masks.shape[0]:
-                    # In semantic-only training (especially with negative/hard-negative queries),
-                    # `masks` can be packed by number of GT objects while `semantic_masks` is
-                    # batched by number of queries. When they mismatch, use semantic masks as the
-                    # canonical batched supervision to avoid dropping valid negative samples.
                     sem_bs = semantic_masks.shape[0]
                     out["masks"] = semantic_masks.bool().clone()
-                    out["num_boxes"] = (
-                        semantic_masks.bool().flatten(1).any(-1).long().to(device)
-                    )
+                    out["num_boxes"] = semantic_masks.bool().flatten(1).any(-1).long().to(device)
                     if self._debug_print_count < self._debug_print_limit:
                         print(
                             "[RSSemanticOnlyLoss][WARN] dict-branch batch mismatch; "
@@ -338,10 +348,6 @@ class RSSemanticOnlyLoss(nn.Module):
         if len(targets) == 0:
             raise ValueError("targets list is empty.")
 
-        # IMPORTANT:
-        # Trainer can pass `targets` as a singleton list whose first element is already
-        # a batched dict (e.g. masks shape [B,H,W]). Detect that case and delegate to
-        # the dict path instead of collapsing batch dim with any(dim=0).
         if len(targets) == 1 and isinstance(targets[0], dict):
             t0 = targets[0]
             if "masks" in t0:
@@ -439,19 +445,9 @@ class RSSemanticOnlyLoss(nn.Module):
         outputs = self._unwrap_outputs(outputs)
         outputs_for_loss = dict(outputs)
 
-        if self.use_instance_max_logit_semantic:
-            if "pred_masks" not in outputs_for_loss:
-                raise KeyError(
-                    "use_instance_max_logit_semantic=True requires 'pred_masks' in outputs, "
-                    f"got keys={list(outputs_for_loss.keys())}"
-                )
-            outputs_for_loss["semantic_seg"] = _aggregate_instance_masks_max_logit(
-                outputs_for_loss["pred_masks"]
-            )
-
         if "semantic_seg" not in outputs_for_loss:
             raise KeyError(
-                f"RSSemanticOnlyLoss expects 'semantic_seg' in outputs, got keys={list(outputs_for_loss.keys())}"
+                f"RSSemanticOnlyLoss expects native 'semantic_seg' in outputs, got keys={list(outputs_for_loss.keys())}"
             )
 
         device = outputs_for_loss["semantic_seg"].device
@@ -473,15 +469,30 @@ class RSSemanticOnlyLoss(nn.Module):
 
             print("[DEBUG] collated targets[masks] shape =", tuple(targets["masks"].shape))
             print("[DEBUG] collated masks batch_fg_ratio =", _fg_ratio(targets["masks"]))
-            print("[DEBUG] collated masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["masks"]))
+            print(
+                "[DEBUG] collated masks per_sample_fg_ratio[:8] =",
+                _fg_ratio_per_sample(targets["masks"]),
+            )
 
             if "semantic_masks" in targets:
-                print("[DEBUG] collated semantic_masks shape =", tuple(targets["semantic_masks"].shape))
-                print("[DEBUG] collated semantic_masks batch_fg_ratio =", _fg_ratio(targets["semantic_masks"]))
-                print("[DEBUG] collated semantic_masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["semantic_masks"]))
+                print(
+                    "[DEBUG] collated semantic_masks shape =",
+                    tuple(targets["semantic_masks"].shape),
+                )
+                print(
+                    "[DEBUG] collated semantic_masks batch_fg_ratio =",
+                    _fg_ratio(targets["semantic_masks"]),
+                )
+                print(
+                    "[DEBUG] collated semantic_masks per_sample_fg_ratio[:8] =",
+                    _fg_ratio_per_sample(targets["semantic_masks"]),
+                )
 
             if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
-                print("[DEBUG] collated num_boxes[:8] =", targets["num_boxes"].detach().cpu().view(-1)[:8].tolist())
+                print(
+                    "[DEBUG] collated num_boxes[:8] =",
+                    targets["num_boxes"].detach().cpu().view(-1)[:8].tolist(),
+                )
 
         targets = _align_semantic_targets_to_pred_batch(outputs_for_loss, targets)
 
@@ -489,45 +500,109 @@ class RSSemanticOnlyLoss(nn.Module):
             print("\n[DEBUG][RSSemanticOnlyLoss][AFTER _align_semantic_targets_to_pred_batch]")
             print("[DEBUG] aligned targets[masks] shape =", tuple(targets["masks"].shape))
             print("[DEBUG] aligned masks batch_fg_ratio =", _fg_ratio(targets["masks"]))
-            print("[DEBUG] aligned masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["masks"]))
+            print(
+                "[DEBUG] aligned masks per_sample_fg_ratio[:8] =",
+                _fg_ratio_per_sample(targets["masks"]),
+            )
 
             if "semantic_masks" in targets:
-                print("[DEBUG] aligned semantic_masks shape =", tuple(targets["semantic_masks"].shape))
-                print("[DEBUG] aligned semantic_masks batch_fg_ratio =", _fg_ratio(targets["semantic_masks"]))
-                print("[DEBUG] aligned semantic_masks per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(targets["semantic_masks"]))
+                print(
+                    "[DEBUG] aligned semantic_masks shape =",
+                    tuple(targets["semantic_masks"].shape),
+                )
+                print(
+                    "[DEBUG] aligned semantic_masks batch_fg_ratio =",
+                    _fg_ratio(targets["semantic_masks"]),
+                )
+                print(
+                    "[DEBUG] aligned semantic_masks per_sample_fg_ratio[:8] =",
+                    _fg_ratio_per_sample(targets["semantic_masks"]),
+                )
 
             if "num_boxes" in targets and torch.is_tensor(targets["num_boxes"]):
-                print("[DEBUG] aligned num_boxes[:8] =", targets["num_boxes"].detach().cpu().view(-1)[:8].tolist())
+                print(
+                    "[DEBUG] aligned num_boxes[:8] =",
+                    targets["num_boxes"].detach().cpu().view(-1)[:8].tolist(),
+                )
 
         semantic_targets_1008 = _safe_semantic_masks(targets)
-
-        semantic_targets_288 = (
-            F.interpolate(
-                semantic_targets_1008.float().unsqueeze(1),
-                size=pred_hw,
-                mode="nearest",
-            )
-            .squeeze(1)
-            .bool()
-        )
 
         if should_debug:
             print("\n[DEBUG][RSSemanticOnlyLoss][FINAL SEM TARGETS]")
             print("[DEBUG] semantic_targets_1008 shape =", tuple(semantic_targets_1008.shape))
-            print("[DEBUG] semantic_targets_1008 batch_fg_ratio =", _fg_ratio(semantic_targets_1008))
-            print("[DEBUG] semantic_targets_1008 per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(semantic_targets_1008))
-            print("[DEBUG] semantic_targets_288 shape =", tuple(semantic_targets_288.shape))
-            print("[DEBUG] semantic_targets_288 batch_fg_ratio =", _fg_ratio(semantic_targets_288))
-            print("[DEBUG] semantic_targets_288 per_sample_fg_ratio[:8] =", _fg_ratio_per_sample(semantic_targets_288))
+            print(
+                "[DEBUG] semantic_targets_1008 batch_fg_ratio =",
+                _fg_ratio(semantic_targets_1008),
+            )
+            print(
+                "[DEBUG] semantic_targets_1008 per_sample_fg_ratio[:8] =",
+                _fg_ratio_per_sample(semantic_targets_1008),
+            )
 
         loss_targets = dict(targets)
-        loss_targets["semantic_masks"] = semantic_targets_288
-        loss_targets["masks"] = semantic_targets_288
+        loss_targets["semantic_masks"] = semantic_targets_1008
+        loss_targets["masks"] = semantic_targets_1008
+        loss_targets["num_boxes"] = semantic_targets_1008.flatten(1).any(-1).long()
 
         loss_dict = self.loss_fn_semantic_seg(outputs_for_loss, loss_targets)
 
+        if (
+            self.aux_instance_semantic_weight > 0.0
+            and "pred_masks" in outputs_for_loss
+            and outputs_for_loss["pred_masks"] is not None
+        ):
+            agg_pred = _aggregate_instance_masks_max_logit(outputs_for_loss["pred_masks"])
+            semantic_targets_native = (
+                F.interpolate(
+                    semantic_targets_1008.float().unsqueeze(1),
+                    size=agg_pred.shape[-2:],
+                    mode="nearest",
+                )
+                .squeeze(1)
+            )
+
+            aux_bce = F.binary_cross_entropy_with_logits(
+                agg_pred.squeeze(1), semantic_targets_native
+            )
+            aux_dice = _binary_dice_from_logits(agg_pred, semantic_targets_native)
+
+            aux_loss = (
+                self.aux_instance_semantic_bce_weight * aux_bce
+                + self.aux_instance_semantic_dice_weight * aux_dice
+            )
+
+            loss_dict["loss_semantic_aux_from_pred_masks"] = aux_loss
+            loss_dict["loss_semantic_aux_from_pred_masks_bce"] = aux_bce
+            loss_dict["loss_semantic_aux_from_pred_masks_dice"] = aux_dice
+
+            if "core_loss" in loss_dict:
+                loss_dict["core_loss"] = (
+                    loss_dict["core_loss"]
+                    + self.aux_instance_semantic_weight * aux_loss
+                )
+
+            if self.consistency_weight > 0.0:
+                inst_side = agg_pred.detach() if self.consistency_detach_instance else agg_pred
+                cons = F.mse_loss(pred, inst_side)
+                loss_dict["loss_semantic_consistency"] = cons
+                if "core_loss" in loss_dict:
+                    loss_dict["core_loss"] = (
+                        loss_dict["core_loss"] + self.consistency_weight * cons
+                    )
+
         with torch.no_grad():
-            pred_prob_288 = pred.float().sigmoid()
+            pred_prob_native = pred.float().sigmoid()
+
+            semantic_targets_native = (
+                F.interpolate(
+                    semantic_targets_1008.float().unsqueeze(1),
+                    size=pred_hw,
+                    mode="nearest",
+                )
+                .squeeze(1)
+                .bool()
+            )
+
             pred_up_1008 = F.interpolate(
                 pred.float(),
                 size=semantic_targets_1008.shape[-2:],
@@ -536,72 +611,84 @@ class RSSemanticOnlyLoss(nn.Module):
             )
             pred_prob_1008 = pred_up_1008.sigmoid()
 
-            # Keep original 0.5 metrics for backwards compatibility.
-            pred_bin_288_t05 = pred_prob_288 > 0.5
+            pred_bin_native_t05 = pred_prob_native > 0.5
             pred_bin_1008_t05 = pred_prob_1008 > 0.5
-            miou_288_t05 = _compute_bin_iou(pred_bin_288_t05[:, 0], semantic_targets_288)
-            miou_1008_t05 = _compute_bin_iou(pred_bin_1008_t05[:, 0], semantic_targets_1008)
-            macc_288_t05 = _compute_bin_macc(pred_bin_288_t05[:, 0], semantic_targets_288)
-            macc_1008_t05 = _compute_bin_macc(pred_bin_1008_t05[:, 0], semantic_targets_1008)
+            miou_native_t05 = _compute_bin_iou(
+                pred_bin_native_t05[:, 0], semantic_targets_native
+            )
+            miou_1008_t05 = _compute_bin_iou(
+                pred_bin_1008_t05[:, 0], semantic_targets_1008
+            )
+            macc_native_t05 = _compute_bin_macc(
+                pred_bin_native_t05[:, 0], semantic_targets_native
+            )
+            macc_1008_t05 = _compute_bin_macc(
+                pred_bin_1008_t05[:, 0], semantic_targets_1008
+            )
 
-            loss_dict["miou_semantic_seg_288"] = miou_288_t05
+            loss_dict["miou_semantic_seg_native"] = miou_native_t05
             loss_dict["miou_semantic_seg_1008"] = miou_1008_t05
-            loss_dict["macc_semantic_seg_288"] = macc_288_t05
+            loss_dict["macc_semantic_seg_native"] = macc_native_t05
             loss_dict["macc_semantic_seg_1008"] = macc_1008_t05
-            # Explicitly expose t05 as the primary score for monitoring/selection.
-            loss_dict["primary_miou_semantic_seg_288"] = miou_288_t05
+            loss_dict["primary_miou_semantic_seg_native"] = miou_native_t05
             loss_dict["primary_miou_semantic_seg_1008"] = miou_1008_t05
-            loss_dict["primary_macc_semantic_seg_288"] = macc_288_t05
+            loss_dict["primary_macc_semantic_seg_native"] = macc_native_t05
             loss_dict["primary_macc_semantic_seg_1008"] = macc_1008_t05
-            loss_dict["pred_fg_ratio_288"] = pred_bin_288_t05.float().mean()
+            loss_dict["pred_fg_ratio_native"] = pred_bin_native_t05.float().mean()
             loss_dict["pred_fg_ratio_1008"] = pred_bin_1008_t05.float().mean()
-            loss_dict["target_fg_ratio_288"] = semantic_targets_288.float().mean()
+            loss_dict["target_fg_ratio_native"] = semantic_targets_native.float().mean()
             loss_dict["target_fg_ratio_1008"] = semantic_targets_1008.float().mean()
 
-            # Probability distribution summary to judge calibration directly.
-            prob_stats_288 = _compute_prob_distribution(pred_prob_288)
+            prob_stats_native = _compute_prob_distribution(pred_prob_native)
             prob_stats_1008 = _compute_prob_distribution(pred_prob_1008)
-            for name, val in prob_stats_288.items():
-                loss_dict[f"pred_prob_{name}_288"] = val
+            for name, val in prob_stats_native.items():
+                loss_dict[f"pred_prob_{name}_native"] = val
             for name, val in prob_stats_1008.items():
                 loss_dict[f"pred_prob_{name}_1008"] = val
 
-            # Multi-threshold calibration view: 0.3 / 0.4 / 0.5 by default.
             threshold_debug_rows = []
             for th in self.calibration_thresholds:
-                pred_bin_288 = pred_prob_288 > th
+                pred_bin_native = pred_prob_native > th
                 pred_bin_1008 = pred_prob_1008 > th
-                miou_288 = _compute_bin_iou(pred_bin_288[:, 0], semantic_targets_288)
-                miou_1008 = _compute_bin_iou(pred_bin_1008[:, 0], semantic_targets_1008)
-                macc_288 = _compute_bin_macc(pred_bin_288[:, 0], semantic_targets_288)
-                macc_1008 = _compute_bin_macc(pred_bin_1008[:, 0], semantic_targets_1008)
-                pred_fg_288 = pred_bin_288.float().mean()
+                miou_native = _compute_bin_iou(
+                    pred_bin_native[:, 0], semantic_targets_native
+                )
+                miou_1008 = _compute_bin_iou(
+                    pred_bin_1008[:, 0], semantic_targets_1008
+                )
+                macc_native = _compute_bin_macc(
+                    pred_bin_native[:, 0], semantic_targets_native
+                )
+                macc_1008 = _compute_bin_macc(
+                    pred_bin_1008[:, 0], semantic_targets_1008
+                )
+                pred_fg_native = pred_bin_native.float().mean()
                 pred_fg_1008 = pred_bin_1008.float().mean()
                 tag = _threshold_tag(th)
-                loss_dict[f"miou_semantic_seg_288_{tag}"] = miou_288
+                loss_dict[f"miou_semantic_seg_native_{tag}"] = miou_native
                 loss_dict[f"miou_semantic_seg_1008_{tag}"] = miou_1008
-                loss_dict[f"macc_semantic_seg_288_{tag}"] = macc_288
+                loss_dict[f"macc_semantic_seg_native_{tag}"] = macc_native
                 loss_dict[f"macc_semantic_seg_1008_{tag}"] = macc_1008
-                loss_dict[f"pred_fg_ratio_288_{tag}"] = pred_fg_288
+                loss_dict[f"pred_fg_ratio_native_{tag}"] = pred_fg_native
                 loss_dict[f"pred_fg_ratio_1008_{tag}"] = pred_fg_1008
                 threshold_debug_rows.append(
                     (
                         th,
-                        float(pred_fg_288.item()),
-                        float(miou_288.item()),
+                        float(pred_fg_native.item()),
+                        float(miou_native.item()),
                         float(pred_fg_1008.item()),
                         float(miou_1008.item()),
                     )
                 )
 
             if should_debug:
-                print("\n[DEBUG][RSSemanticOnlyLoss][288 DIAG]")
+                print("\n[DEBUG][RSSemanticOnlyLoss][NATIVE DIAG]")
                 print(
-                    f"[DEBUG] pred_288 shape={tuple(pred.shape)} "
-                    f"prob_mean={pred_prob_288.mean().item():.6f} "
-                    f"pred_fg@0.5={pred_bin_288_t05.float().mean().item():.6f} "
-                    f"target_fg={semantic_targets_288.float().mean().item():.6f} "
-                    f"miou_288={miou_288_t05.item():.6f}"
+                    f"[DEBUG] pred_native shape={tuple(pred.shape)} "
+                    f"prob_mean={pred_prob_native.mean().item():.6f} "
+                    f"pred_fg@0.5={pred_bin_native_t05.float().mean().item():.6f} "
+                    f"target_fg={semantic_targets_native.float().mean().item():.6f} "
+                    f"miou_native={miou_native_t05.item():.6f}"
                 )
                 print("[DEBUG][RSSemanticOnlyLoss][1008 DIAG]")
                 print(
@@ -613,19 +700,25 @@ class RSSemanticOnlyLoss(nn.Module):
                 )
                 print("[DEBUG][RSSemanticOnlyLoss][PROB DIST]")
                 print(
-                    f"[DEBUG] 288 mean={prob_stats_288['mean'].item():.6f} std={prob_stats_288['std'].item():.6f} "
-                    f"p10={prob_stats_288['p10'].item():.6f} p50={prob_stats_288['p50'].item():.6f} p90={prob_stats_288['p90'].item():.6f}"
+                    f"[DEBUG] native mean={prob_stats_native['mean'].item():.6f} "
+                    f"std={prob_stats_native['std'].item():.6f} "
+                    f"p10={prob_stats_native['p10'].item():.6f} "
+                    f"p50={prob_stats_native['p50'].item():.6f} "
+                    f"p90={prob_stats_native['p90'].item():.6f}"
                 )
                 print(
-                    f"[DEBUG] 1008 mean={prob_stats_1008['mean'].item():.6f} std={prob_stats_1008['std'].item():.6f} "
-                    f"p10={prob_stats_1008['p10'].item():.6f} p50={prob_stats_1008['p50'].item():.6f} p90={prob_stats_1008['p90'].item():.6f}"
+                    f"[DEBUG] 1008 mean={prob_stats_1008['mean'].item():.6f} "
+                    f"std={prob_stats_1008['std'].item():.6f} "
+                    f"p10={prob_stats_1008['p10'].item():.6f} "
+                    f"p50={prob_stats_1008['p50'].item():.6f} "
+                    f"p90={prob_stats_1008['p90'].item():.6f}"
                 )
                 print("[DEBUG][RSSemanticOnlyLoss][THRESH CALIBRATION]")
-                for th, fg288, mi288, fg1008, mi1008 in threshold_debug_rows:
+                for th, fg_n, mi_n, fg_1008, mi_1008 in threshold_debug_rows:
                     print(
                         f"[DEBUG] th={th:.1f} | "
-                        f"288: pred_fg={fg288:.6f} miou={mi288:.6f} | "
-                        f"1008: pred_fg={fg1008:.6f} miou={mi1008:.6f}"
+                        f"native: pred_fg={fg_n:.6f} miou={mi_n:.6f} | "
+                        f"1008: pred_fg={fg_1008:.6f} miou={mi_1008:.6f}"
                     )
                 self._debug_print_count += 1
 

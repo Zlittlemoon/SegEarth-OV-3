@@ -1,4 +1,4 @@
-﻿# @package _global_
+# @package _global_
 defaults:
   - _self_
 
@@ -75,12 +75,12 @@ dlrsd_train:
     _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
     calibration_thresholds: [0.5, 0.3, 0.4]
 
-    # 推荐：先关掉 instance->semantic 主替代
-    aux_instance_semantic_weight: 0.15
+    # 主路径直接监督模型原生 semantic_seg
+    aux_instance_semantic_weight: 0.10
     aux_instance_semantic_bce_weight: 1.0
     aux_instance_semantic_dice_weight: 1.0
 
-    # 一开始可以先设 0，等主训练稳定后再开
+    # 先建议设 0，等主训练稳定后再慢慢打开
     consistency_weight: 0.0
     consistency_detach_instance: True
 
@@ -121,14 +121,12 @@ scratch:
   val_norm_mean: [0.5, 0.5, 0.5]
   val_norm_std: [0.5, 0.5, 0.5]
 
-
   num_train_workers: 0
   num_val_workers: 0
 
   hybrid_repeats: 1
   context_length: 2
   gather_pred_via_filesys: false
-
 
   lr_transformer: 1.0e-5
   lr_vision_backbone: 0.0
@@ -141,7 +139,6 @@ scratch:
   scheduler_cooldown: 10
 
   gradient_accumulation_steps: 1
-
 
   train_batch_size: 16
   val_batch_size: 16
