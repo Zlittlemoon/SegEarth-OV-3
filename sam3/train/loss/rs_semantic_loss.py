@@ -143,19 +143,47 @@ def _compute_prob_distribution(prob: torch.Tensor) -> Dict[str, torch.Tensor]:
     }
 
 
-def _aggregate_instance_masks_max_logit(pred_masks: torch.Tensor) -> torch.Tensor:
+def _aggregate_instance_masks_logits(
+    pred_masks: torch.Tensor,
+    mode: str = "logsumexp",
+    logsumexp_tau: float = 1.0,
+    logsumexp_normalize: bool = True,
+) -> torch.Tensor:
     if not torch.is_tensor(pred_masks):
         raise TypeError(f"pred_masks should be a tensor, got {type(pred_masks)}")
 
+    mode = str(mode).strip().lower()
+    if logsumexp_tau <= 0:
+        raise ValueError(
+            f"logsumexp_tau must be > 0, got {logsumexp_tau}"
+        )
+
     if pred_masks.ndim == 4:
-        return pred_masks.max(dim=1, keepdim=True).values
+        if mode == "max":
+            return pred_masks.max(dim=1, keepdim=True).values
+
+        if mode in {"logsumexp", "logmeanexp"}:
+            q = pred_masks.shape[1]
+            agg = torch.logsumexp(pred_masks / logsumexp_tau, dim=1, keepdim=True)
+            agg = agg * logsumexp_tau
+            if mode == "logmeanexp" or logsumexp_normalize:
+                # Keep scale closer to max-logit by removing the query-count bias.
+                agg = agg - logsumexp_tau * torch.log(
+                    torch.tensor(float(max(q, 1)), device=agg.device, dtype=agg.dtype)
+                )
+            return agg
+
+        raise ValueError(
+            f"Unsupported aggregation mode: {mode}. "
+            "Expected one of ['max', 'logsumexp', 'logmeanexp']."
+        )
     if pred_masks.ndim == 3:
         return pred_masks.unsqueeze(1)
     if pred_masks.ndim == 2:
         return pred_masks.unsqueeze(0).unsqueeze(0)
 
     raise ValueError(
-        f"Unsupported pred_masks shape for max-logit aggregation: {tuple(pred_masks.shape)}"
+        f"Unsupported pred_masks shape for aggregation: {tuple(pred_masks.shape)}"
     )
 
 
@@ -184,6 +212,9 @@ class RSSemanticOnlyLoss(nn.Module):
         aux_instance_semantic_weight: float = 0.0,
         aux_instance_semantic_bce_weight: float = 1.0,
         aux_instance_semantic_dice_weight: float = 1.0,
+        aux_instance_semantic_aggregation: str = "logsumexp",
+        aux_instance_semantic_logsumexp_tau: float = 1.0,
+        aux_instance_semantic_logsumexp_normalize: bool = True,
         consistency_weight: float = 0.0,
         consistency_detach_instance: bool = True,
     ) -> None:
@@ -198,6 +229,11 @@ class RSSemanticOnlyLoss(nn.Module):
         self.aux_instance_semantic_weight = float(aux_instance_semantic_weight)
         self.aux_instance_semantic_bce_weight = float(aux_instance_semantic_bce_weight)
         self.aux_instance_semantic_dice_weight = float(aux_instance_semantic_dice_weight)
+        self.aux_instance_semantic_aggregation = str(aux_instance_semantic_aggregation).strip().lower()
+        self.aux_instance_semantic_logsumexp_tau = float(aux_instance_semantic_logsumexp_tau)
+        self.aux_instance_semantic_logsumexp_normalize = bool(
+            aux_instance_semantic_logsumexp_normalize
+        )
         self.consistency_weight = float(consistency_weight)
         self.consistency_detach_instance = bool(consistency_detach_instance)
 
@@ -551,7 +587,12 @@ class RSSemanticOnlyLoss(nn.Module):
             and "pred_masks" in outputs_for_loss
             and outputs_for_loss["pred_masks"] is not None
         ):
-            agg_pred = _aggregate_instance_masks_max_logit(outputs_for_loss["pred_masks"])
+            agg_pred = _aggregate_instance_masks_logits(
+                outputs_for_loss["pred_masks"],
+                mode=self.aux_instance_semantic_aggregation,
+                logsumexp_tau=self.aux_instance_semantic_logsumexp_tau,
+                logsumexp_normalize=self.aux_instance_semantic_logsumexp_normalize,
+            )
             semantic_targets_native = (
                 F.interpolate(
                     semantic_targets_1008.float().unsqueeze(1),
@@ -574,6 +615,11 @@ class RSSemanticOnlyLoss(nn.Module):
             loss_dict["loss_semantic_aux_from_pred_masks"] = aux_loss
             loss_dict["loss_semantic_aux_from_pred_masks_bce"] = aux_bce
             loss_dict["loss_semantic_aux_from_pred_masks_dice"] = aux_dice
+            loss_dict["aux_instance_semantic_logsumexp_tau"] = torch.tensor(
+                self.aux_instance_semantic_logsumexp_tau,
+                device=agg_pred.device,
+                dtype=agg_pred.dtype,
+            )
 
             if "core_loss" in loss_dict:
                 loss_dict["core_loss"] = (

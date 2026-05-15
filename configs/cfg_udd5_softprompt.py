@@ -6,7 +6,7 @@ model = dict(
     confidence_threshold=0.5,
     prob_thd=0.1,
     bg_idx=4,
-    finetuned_checkpoint_path='outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_1xA6000_lr_1e-5_batch4/checkpoints/checkpoint_4.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_4x3090_lr_1e-5_batch2/checkpoints/checkpoint_20.pt',
     use_soft_prompt=True,
 )
 
