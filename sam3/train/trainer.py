@@ -2610,6 +2610,21 @@ class Trainer:
             elif preset == "head_prompt":
                 exact_names = set(soft_exact_names)
                 prefixes = ("sam3.segmentation_head.",)
+            elif preset in ("head_plus_decoder_last_n", "head_decoder_last_n"):
+                # Train full segmentation head plus the last N decoder layers.
+                # N is controlled by SAM3_DECODER_LAST_N (default 2, clamped to [1, 6]).
+                exact_names = set(soft_exact_names)
+                try:
+                    last_n = int(os.getenv("SAM3_DECODER_LAST_N", "2"))
+                except ValueError:
+                    last_n = 2
+                last_n = max(1, min(6, last_n))
+
+                decoder_layer_prefixes = tuple(
+                    f"sam3.transformer.decoder.layers.{idx}."
+                    for idx in range(6 - last_n, 6)
+                )
+                prefixes = ("sam3.segmentation_head.",) + decoder_layer_prefixes
             elif preset in ("soft_only_mm_pixel", "soft_only_mmdec_pixeldec"):
                 exact_names = set(soft_exact_names)
                 prefixes = (
@@ -2673,6 +2688,8 @@ class Trainer:
                     "text_last2",
                     "text_all6",
                     "head_prompt",
+                    "head_plus_decoder_last_n",
+                    "head_decoder_last_n",
                     "soft_only_mm_pixel",
                     "soft_only_mmdec_pixeldec",
                     "mm_pixel_only",
@@ -2781,9 +2798,11 @@ class Trainer:
         text_lr = float(os.getenv("SAM3_TEXT_LR", "1e-5"))
         detector_lr = float(os.getenv("SAM3_DETECTOR_LR", str(text_lr)))
         presence_lr = float(os.getenv("SAM3_PRESENCE_LR", str(text_lr)))
-        mm_decoder_lr = float(os.getenv("SAM3_MM_DECODER_LR", str(text_lr)))
+        mm_decoder_lr = float(
+            os.getenv("SAM3_MM_DECODER_LR", os.getenv("DECODER_LR", str(text_lr)))
+        )        
         pixel_decoder_lr = float(os.getenv("SAM3_PIXEL_DECODER_LR", str(text_lr)))
-        head_lr = float(os.getenv("SAM3_HEAD_LR", str(soft_lr)))
+        head_lr = float(os.getenv("SAM3_HEAD_LR", os.getenv("HEAD_LR", str(soft_lr))))
 
         if self.optim_conf.options is None:
             raise ValueError("self.optim_conf.options is None; cannot build optimizer param groups.")

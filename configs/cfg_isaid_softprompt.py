@@ -8,13 +8,13 @@ model = dict(
     # slide_stride=1008,
     # slide_crop=1008,
     # Optional override (already set in base_config_softprompt.py)
-    finetuned_checkpoint_path='outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_1xA6000_lr_1e-5_batch4/checkpoints/checkpoint_4.pt',
+    # finetuned_checkpoint_path='outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_1xA6000_lr_1e-5_batch4/checkpoints/checkpoint_4.pt',
     use_soft_prompt=True,
 )
 
 # dataset settings
 dataset_type = 'iSAIDDataset'
-data_root = 'data/isaid_full_image'
+data_root = 'data/isaid_patch'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),

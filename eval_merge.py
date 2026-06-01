@@ -129,10 +129,10 @@ def main():
                     'Dataset': cfg.dataset_type})
 
     if runner.rank == 0:
-        append_experiment_result('results_OV3heads_dlrsd_detector_presence_only_instance_maxlogit_nosoft_input_fixed_4x3090_lr_1e-5_batch2.xlsx', [results])
+        append_experiment_result('results_OV3heads_dlrsd_v0a_seghead_only_4x4090.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results_OV3heads_dlrsd_detector_presence_only_instance_maxlogit_nosoft_input_fixed_4x3090_lr_1e-5_batch2.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results_OV3heads_dlrsd_v0a_seghead_only_4x4090.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')
