@@ -1299,33 +1299,42 @@ def _set_lr_in_scheduler_cfg(scheduler_cfg: Dict[str, Any], lr_value: float) -> 
 
 
 def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
-    soft_names = []
-    text_names = []
-    detector_names = []
-    presence_names = []
-    mm_decoder_names = []
-    pixel_decoder_names = []
-    head_names = []
+    soft_names = set()
+    text_names = set()
+    detector_names = set()
+    presence_names = set()
+    mm_decoder_names = set()
+    pixel_decoder_names = set()
+    head_names = set()
+    sr_adapter_names = set()
     unexpected_names = []
+
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
+
+        # 新增：SR adapter 单独成组
+        if name.startswith("sr_adapter."):
+            sr_adapter_names.add(name)
+            continue
+
         if _is_soft_prompt_param(name):
-            soft_names.append(name)
+            soft_names.add(name)
         elif _is_text_prompt_param(name):
-            text_names.append(name)
+            text_names.add(name)
         elif _is_detector_param(name):
-            detector_names.append(name)
+            detector_names.add(name)
         elif _is_presence_token_param(name):
-            presence_names.append(name)
-        elif _is_multimodal_decoder_param(name):
-            mm_decoder_names.append(name)
-        elif _is_pixel_decoder_param(name):
-            pixel_decoder_names.append(name)
-        elif _is_head_param(name):
-            head_names.append(name)
+            presence_names.add(name)
+        elif name.startswith("sam3.transformer.decoder."):
+            mm_decoder_names.add(name)
+        elif name.startswith("sam3.segmentation_head.pixel_decoder."):
+            pixel_decoder_names.add(name)
+        elif name.startswith("sam3.segmentation_head."):
+            head_names.add(name)
         else:
             unexpected_names.append(name)
+
     return (
         soft_names,
         text_names,
@@ -1334,6 +1343,7 @@ def _collect_trainable_param_names_for_rs_tuning(model: torch.nn.Module):
         mm_decoder_names,
         pixel_decoder_names,
         head_names,
+        sr_adapter_names,
         unexpected_names,
     )
 
@@ -2548,6 +2558,10 @@ class Trainer:
                 preset = os.getenv("SAM3_TEXT_UNFREEZE_PRESET", "text_last1")
             preset = str(preset).strip().lower().replace("-", "_").replace("+", "_")
 
+            use_sr_adapter = os.getenv("SAM3_RS_USE_SR", "0") == "1"
+            sr_adapter_prefixes = ("sr_adapter.",)
+            sr_extractor_prefixes = ("sr_extractor.",)
+
             for _, p in model.named_parameters():
                 p.requires_grad = False
 
@@ -2751,6 +2765,14 @@ class Trainer:
                     "detector_presence_token_only",
                 ) and _is_text_prompt_param(name):
                     keep = False
+                
+                # SR-A: train sr_adapter only, keep frozen TTST / SR extractor frozen.
+                if use_sr_adapter and name.startswith(sr_adapter_prefixes):
+                    keep = True
+
+                if name.startswith(sr_extractor_prefixes):
+                    keep = False
+
                 if keep:
                     p.requires_grad = True
                     changed.append(name)
@@ -2803,6 +2825,7 @@ class Trainer:
         )        
         pixel_decoder_lr = float(os.getenv("SAM3_PIXEL_DECODER_LR", str(text_lr)))
         head_lr = float(os.getenv("SAM3_HEAD_LR", os.getenv("HEAD_LR", str(soft_lr))))
+        sr_adapter_lr = float(os.getenv("SAM3_SR_ADAPTER_LR", "1e-4"))
 
         if self.optim_conf.options is None:
             raise ValueError("self.optim_conf.options is None; cannot build optimizer param groups.")
@@ -2819,6 +2842,7 @@ class Trainer:
             mm_decoder_names,
             pixel_decoder_names,
             head_names,
+            sr_adapter_names,
             unexpected_names,
         ) = _collect_trainable_param_names_for_rs_tuning(self.model)
         if (
@@ -2829,9 +2853,10 @@ class Trainer:
             and len(mm_decoder_names) == 0
             and len(pixel_decoder_names) == 0
             and len(head_names) == 0
+            and len(sr_adapter_names) == 0
         ):
             raise RuntimeError(
-                "[RS OPTIM] No trainable params matched any of: soft/text/detector/presence/mm-decoder/pixel-decoder/head."
+                "[RS OPTIM] No trainable params matched any of: soft/text/detector/presence/mm-decoder/pixel-decoder/head/sr-adapter."
             )
         if (
             len(text_names) == 0
@@ -2840,13 +2865,14 @@ class Trainer:
             and len(mm_decoder_names) == 0
             and len(pixel_decoder_names) == 0
             and len(head_names) == 0
+            and len(sr_adapter_names) == 0
         ):
             logging.warning(
                 "[RS OPTIM] No trainable text/detector/presence/mm-decoder/pixel-decoder/head params matched; optimizer becomes soft-prompt-only."
             )
         if len(unexpected_names) > 0:
             raise RuntimeError(
-                "[RS OPTIM] Found trainable params outside soft/text/detector/presence/mm-decoder/pixel-decoder/head groups:\n"
+                "[RS OPTIM] Found trainable params outside soft/text/detector/presence/mm-decoder/pixel-decoder/head/sr-adapter groups:\n"
                 + "\n".join(unexpected_names[:200])
             )
 
@@ -2887,6 +2913,11 @@ class Trainer:
             head_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, head_lr)
             head_lr_cfg["param_names"] = sorted(head_names)
             options_conf["lr"].append(head_lr_cfg)
+            
+        if len(sr_adapter_names) > 0:
+            sr_adapter_lr_cfg = _set_lr_in_scheduler_cfg(base_lr_cfg, sr_adapter_lr)
+            sr_adapter_lr_cfg["param_names"] = sorted(sr_adapter_names)
+            options_conf["lr"].append(sr_adapter_lr_cfg)
 
         if len(options_conf["lr"]) == 0:
             raise RuntimeError("[RS OPTIM] No optimizer lr groups were created.")
@@ -2899,6 +2930,7 @@ class Trainer:
             | set(mm_decoder_names)
             | set(pixel_decoder_names)
             | set(head_names)
+            | set(sr_adapter_names)
         )
         logging.info("[RS OPTIM] soft_prompt    lr = %.8f", soft_lr)
         logging.info("[RS OPTIM] text-layer     lr = %.8f", text_lr)
@@ -2914,7 +2946,9 @@ class Trainer:
         logging.info("[RS OPTIM] #mmdec tensors  = %d", len(mm_decoder_names))
         logging.info("[RS OPTIM] #pixel tensors  = %d", len(pixel_decoder_names))
         logging.info("[RS OPTIM] #head tensors   = %d", len(head_names))
-
+        logging.info("[RS OPTIM] sr-adapter     lr = %.8f", sr_adapter_lr)
+        logging.info("[RS OPTIM] #sr tensors    = %d", len(sr_adapter_names))
+        
         self.optim = construct_optimizer(
             self.model,
             self.optim_conf.optimizer,

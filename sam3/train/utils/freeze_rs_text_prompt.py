@@ -27,6 +27,14 @@ BLOCK_REGEX = [
     r"(?:^|\.)(video)(?:_|\.|$)",
 ]
 
+SR_ADAPTER_KEEP_REGEX = [
+    r"^sr_adapter\.",
+]
+
+SR_EXTRACTOR_BLOCK_REGEX = [
+    r"^sr_extractor\.",
+]
+
 
 def _match_any(name: str, patterns: Iterable[str]) -> bool:
     return any(re.search(p, name) for p in patterns)
@@ -44,6 +52,11 @@ def freeze_for_remote_sensing_text_prompt_semseg(
     keep_regex = list(MINIMAL_KEEP_REGEX)
     if mode == "extended":
         keep_regex += EXTENDED_EXTRA_KEEP_REGEX
+    
+    if os.environ.get("SAM3_RS_USE_SR", "0") == "1":
+        keep_regex += SR_ADAPTER_KEEP_REGEX
+    
+    block_regex = list(BLOCK_REGEX) + SR_EXTRACTOR_BLOCK_REGEX
 
     trainable_names: List[str] = []
     frozen_names: List[str] = []
@@ -53,7 +66,7 @@ def freeze_for_remote_sensing_text_prompt_semseg(
 
     for name, p in model.named_parameters():
         keep = _match_any(name, keep_regex)
-        block = _match_any(name, BLOCK_REGEX)
+        block = _match_any(name, block_regex)
 
         if keep and not block:
             p.requires_grad = True

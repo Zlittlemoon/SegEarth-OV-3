@@ -6,6 +6,7 @@ from mmseg.models.data_preprocessor import SegDataPreProcessor
 from mmengine.structures import PixelData
 from mmseg.registry import MODELS
 from PIL import Image
+from torchvision.transforms import v2
 
 from sam3.model_builder import build_sam3_image_model, build_rs_prompt_semantic_model
 from sam3.model.sam3_image_processor import Sam3Processor
@@ -62,6 +63,8 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             model = model.to(self.device).eval()
             self.model = model
             self.sam3_core = model.sam3
+            self.use_sr = bool(getattr(model, "use_sr", False))
+            self.soft_prompt_pos = getattr(model, "soft_prompt_pos", "post_concat")
 
             # Template find_input for single-query inference.
             self.soft_find_input = FindStage(
@@ -86,6 +89,8 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             self.model = model
             self.sam3_core = model
             self.soft_find_input = None
+            self.use_sr = False
+            self.soft_prompt_pos = "none"
 
         # Keep original processor-driven inference path for image prep and baseline model path.
         self.processor = Sam3Processor(
@@ -107,6 +112,11 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
         self.use_sem_seg = use_sem_seg
         self.use_presence_score = use_presence_score
         self.use_transformer_decoder = use_transformer_decoder
+        if self.use_soft_prompt:
+            print(
+                "[SOFT PROMPT INFER] "
+                f"soft_prompt_pos={self.soft_prompt_pos}, use_sr={self.use_sr}"
+            )
 
     def _load_finetuned_state_dict(self, model, ckpt_path: str):
         ckpt = torch.load(ckpt_path, map_location="cpu")
@@ -156,9 +166,18 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             cleaned.pop(k, None)
 
         missing, unexpected = model.load_state_dict(cleaned, strict=False)
+        ckpt_has_sr_adapter = any(k.startswith("sr_adapter.") for k in cleaned.keys())
+        model_has_sr_adapter = hasattr(model, "sr_adapter") and model.sr_adapter is not None
         print(f"[SOFT PROMPT LOAD] checkpoint={ckpt_path}")
         print(f"[SOFT PROMPT LOAD] missing keys   : {len(missing)}")
         print(f"[SOFT PROMPT LOAD] unexpected keys: {len(unexpected)}")
+        if ckpt_has_sr_adapter and not model_has_sr_adapter:
+            print(
+                "[SOFT PROMPT LOAD][WARNING] checkpoint contains sr_adapter.* "
+                "but the inference model did not instantiate sr_adapter. "
+                "Set SAM3_RS_USE_SR=1 and the SAM3_RS_SR_* env vars before building "
+                "the model if this is an SR-adapter checkpoint."
+            )
         if len(resized_keys) > 0:
             print(f"[SOFT PROMPT LOAD] resized keys  : {len(resized_keys)}")
             print("[SOFT PROMPT LOAD] first resized :", resized_keys[:20])
@@ -187,13 +206,54 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             f"but got type={type(value)}"
         )
 
+    def _image_to_model_tensor(self, image):
+        if isinstance(image, Image.Image):
+            width, height = image.size
+        elif isinstance(image, torch.Tensor):
+            height, width = image.shape[-2:]
+        else:
+            height, width = image.shape[-2:]
+
+        image_tensor = v2.functional.to_image(image).to(self.device)
+        image_tensor = self.processor.transform(image_tensor).unsqueeze(0)
+        return image_tensor, height, width
+
+    def _set_image_soft_prompt(self, image):
+        image_tensor, height, width = self._image_to_model_tensor(image)
+        backbone_out = self.sam3_core.backbone.forward_image(image_tensor)
+        if self.use_sr:
+            backbone_out = self.model._apply_sr_to_backbone_out(backbone_out, image_tensor)
+        return {
+            "original_height": height,
+            "original_width": width,
+            "backbone_out": backbone_out,
+        }
+
+    def _forward_text_soft_prompt(self, query_word: str):
+        pre_text_soft_prompt = None
+        if self.soft_prompt_pos == "pre_text":
+            pre_text_soft_prompt = self.model._build_pre_text_soft_prompt(batch_size=1)
+            if pre_text_soft_prompt is not None:
+                pre_text_soft_prompt = pre_text_soft_prompt.to(device=self.device)
+
+        text_outputs = self.sam3_core.backbone.forward_text(
+            [query_word],
+            device=self.device,
+            soft_prompt_embed=pre_text_soft_prompt,
+        )
+
+        if self.soft_prompt_pos == "post_text_add":
+            text_outputs = self.model._apply_post_text_soft_prompt(text_outputs)
+
+        return text_outputs
+
     def _forward_query_soft_prompt(self, inference_state, query_word: str, h: int, w: int):
         """
         Run one query with soft-prompt tuning active and return a state dict
         compatible with the original inference loop keys.
         """
         # 1) update text features on top of cached image backbone features
-        text_outputs = self.sam3_core.backbone.forward_text([query_word], device=self.device)
+        text_outputs = self._forward_text_soft_prompt(query_word)
         backbone_out = inference_state["backbone_out"]
         backbone_out.update(text_outputs)
 
@@ -209,12 +269,13 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             encode_text=True,
             prev_mask_pred=None,
         )
-        tuned_prompt = self.model._apply_prompt_tuning(prompt, prompt_mask)
-        if isinstance(tuned_prompt, tuple) and len(tuned_prompt) == 2:
-            prompt, prompt_mask = tuned_prompt
-        else:
-            # Backward compatibility if helper returns prompt only.
-            prompt = tuned_prompt
+        if self.soft_prompt_pos == "post_concat":
+            tuned_prompt = self.model._apply_prompt_tuning(prompt, prompt_mask)
+            if isinstance(tuned_prompt, tuple) and len(tuned_prompt) == 2:
+                prompt, prompt_mask = tuned_prompt
+            else:
+                # Backward compatibility if helper returns prompt only.
+                prompt = tuned_prompt
 
         # Compatibility: some codepaths can wrap prompt/prompt_mask in tuple/list.
         prompt = self._extract_first_tensor(prompt, "prompt")
@@ -288,7 +349,39 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             "object_score": out_probs,
             "semantic_mask_logits": out_semantic,
             "presence_score": out["presence_logit_dec"].sigmoid().squeeze(),
+            "object_score_includes_presence": True,
+            "semantic_score_includes_presence": False,
         }
+
+    @staticmethod
+    def _score_without_presence(score, presence_score):
+        if torch.is_tensor(presence_score):
+            return score / presence_score.to(score.device).clamp_min(1.0e-6)
+        return score / max(float(presence_score), 1.0e-6)
+
+    def _maybe_apply_presence_to_instance_score(self, query_state, instance_score):
+        presence_score = query_state.get("presence_score", None)
+        includes_presence = bool(query_state.get("object_score_includes_presence", True))
+
+        if presence_score is None:
+            return instance_score
+        if includes_presence and not self.use_presence_score:
+            return self._score_without_presence(instance_score, presence_score)
+        if (not includes_presence) and self.use_presence_score:
+            return instance_score * presence_score
+        return instance_score
+
+    def _maybe_apply_presence_to_semantic_score(self, query_state, semantic_logits):
+        presence_score = query_state.get("presence_score", None)
+        includes_presence = bool(query_state.get("semantic_score_includes_presence", False))
+
+        if presence_score is None:
+            return semantic_logits
+        if includes_presence and not self.use_presence_score:
+            return self._score_without_presence(semantic_logits, presence_score)
+        if (not includes_presence) and self.use_presence_score:
+            return semantic_logits * presence_score
+        return semantic_logits
 
     def _inference_single_view(self, image):
         """Inference on a single PIL image or crop patch."""
@@ -301,7 +394,10 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
             dtype=torch.bfloat16,
             enabled=autocast_enabled,
         ):
-            inference_state = self.processor.set_image(image)
+            if self.use_soft_prompt:
+                inference_state = self._set_image_soft_prompt(image)
+            else:
+                inference_state = self.processor.set_image(image)
 
             for query_idx, query_word in enumerate(self.query_words):
                 if self.use_soft_prompt:
@@ -318,6 +414,10 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
                         for inst_id in range(inst_len):
                             instance_logits = query_state["masks_logits"][inst_id].squeeze()
                             instance_score = query_state["object_score"][inst_id]
+                            instance_score = self._maybe_apply_presence_to_instance_score(
+                                query_state,
+                                instance_score,
+                            )
 
                             # Keep same compatibility guard as original implementation.
                             if instance_logits.shape != (h, w):
@@ -343,10 +443,11 @@ class SegEarthOV3SegmentationSoftPrompt(BaseSegmentor):
                             align_corners=False,
                         ).squeeze()
 
+                    semantic_logits = self._maybe_apply_presence_to_semantic_score(
+                        query_state,
+                        semantic_logits,
+                    )
                     seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits)
-
-                if self.use_presence_score:
-                    seg_logits[query_idx] = seg_logits[query_idx] * query_state["presence_score"]
 
         return seg_logits
 

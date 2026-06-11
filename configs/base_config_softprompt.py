@@ -4,7 +4,7 @@ model = dict(
     type='SegEarthOV3SegmentationSoftPrompt',
     model_type='SAM3',
     checkpoint_path='weights/sam3/sam3.pt',
-    finetuned_checkpoint_path='outputs/dlrsd_v0a_seghead_only_4x4090/checkpoints/checkpoint.pt',
+    finetuned_checkpoint_path='outputs/dlrsd_v0b_seghead_decoderlast2_4x4090/checkpoints/checkpoint.pt',
     use_soft_prompt=True,
     bpe_path='./sam3/assets/bpe_simple_vocab_16e6.txt.gz',
 )

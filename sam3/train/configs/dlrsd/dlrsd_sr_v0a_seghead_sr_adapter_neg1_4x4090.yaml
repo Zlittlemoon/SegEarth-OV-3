@@ -1,0 +1,334 @@
+# @package _global_
+defaults:
+  - _self_
+
+paths:
+  bpe_path: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
+  experiment_log_dir: "outputs/dlrsd_sr_v0a_seghead_sr_adapter_neg1_4x4090"
+  train_img_dir: "data/DLRSD_split/train/imgs"
+  val_img_dir: "data/DLRSD_split/val/imgs"
+  train_ann: "data/sam3_semantic_fixed/dlrsd/train.sam3.semantic.neg1.json"
+  val_ann: "data/sam3_semantic_fixed/dlrsd/val.sam3.semantic.json"
+  sam3_ckpt: "weights/sam3/sam3.pt"
+
+  # SR / TTST checkpoint
+  # 这里改成你实际放置 TTST 官方权重的位置
+  sr_ckpt: "weights/TTST/ttst_4x.pth"
+
+launcher:
+  num_nodes: 1
+  gpus_per_node: 4
+  experiment_log_dir: ${paths.experiment_log_dir}
+
+submitit:
+  use_cluster: false
+  timeout_hour: 72
+  cpus_per_task: 8
+  mem_gb: null
+  mem: null
+  partition: null
+  account: null
+  qos: null
+  constraints: null
+  comment: null
+  exclude_nodes: []
+  port_range: [29500, 29600]
+
+dlrsd_train:
+  num_images: 8
+
+  train_transforms:
+    - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+      transforms:
+        - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+          query_filter:
+            _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+
+        - _target_: sam3.train.transforms.segmentation.DecodeRle
+
+        - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+          sizes:
+            _target_: sam3.train.transforms.basic.get_random_resize_scales
+            size: ${scratch.resolution}
+            min_size: 256
+            rounded: false
+          max_size:
+            _target_: sam3.train.transforms.basic.get_random_resize_max_size
+            size: ${scratch.resolution}
+          square: true
+          consistent_transform: ${scratch.consistent_transform}
+
+        - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+          size: ${scratch.resolution}
+          consistent_transform: ${scratch.consistent_transform}
+
+        - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+
+        - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+          query_filter:
+            _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+
+        - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+          mean: ${scratch.train_norm_mean}
+          std: ${scratch.train_norm_std}
+
+  val_transforms:
+    - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+      transforms:
+        - _target_: sam3.train.transforms.segmentation.DecodeRle
+
+        - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+          sizes: ${scratch.resolution}
+          max_size:
+            _target_: sam3.train.transforms.basic.get_random_resize_max_size
+            size: ${scratch.resolution}
+          square: true
+          consistent_transform: false
+
+        - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+
+        - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+          mean: ${scratch.val_norm_mean}
+          std: ${scratch.val_norm_std}
+
+  loss:
+    _target_: sam3.train.loss.rs_semantic_loss.RSSemanticOnlyLoss
+    calibration_thresholds: [0.5, 0.3, 0.4]
+
+    aux_instance_semantic_weight: 0.0
+    aux_instance_semantic_bce_weight: 1.0
+    aux_instance_semantic_dice_weight: 1.0
+
+    consistency_weight: 0.0
+    consistency_detach_instance: True
+
+    loss_fn_semantic_seg:
+      _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+      presence_head: False
+      presence_loss: False
+      focal: True
+      focal_alpha: 0.6
+      focal_gamma: 2.0
+      downsample: True
+      weight_dict:
+        loss_semantic_seg: 1.0
+        loss_semantic_dice: 1.0
+
+scratch:
+  enable_segmentation: True
+  use_presence_eval: True
+
+  matcher:
+    _target_: sam3.train.matcher.BinaryHungarianMatcherV2
+    focal: true
+    cost_class: 2.0
+    cost_bbox: 2.0
+    cost_giou: 1.0
+    alpha: 0.25
+    gamma: 2.0
+    stable: False
+
+  scale_by_find_batch_size: False
+
+  resolution: 1008
+  consistent_transform: False
+  max_ann_per_img: 200
+
+  train_norm_mean: [0.5, 0.5, 0.5]
+  train_norm_std: [0.5, 0.5, 0.5]
+  val_norm_mean: [0.5, 0.5, 0.5]
+  val_norm_std: [0.5, 0.5, 0.5]
+
+  num_train_workers: 4
+  num_val_workers: 2
+  hybrid_repeats: 1
+  context_length: 2
+  gather_pred_via_filesys: false
+
+  # Version A 仍然保持 SAM3 主体不大范围训练
+  lr_transformer: 1.0e-5
+  lr_vision_backbone: 0.0
+  lr_language_backbone: 0.0
+  lrd_vision_backbone: 1.0
+  wd: 0.0
+
+  # SR-A 新增：sr_adapter 是新模块，学习率可以比 SAM3 head 大
+  # 如果训练不稳定，可以把 1e-4 改成 5e-5
+  lr_sr_adapter: 1.0e-4
+
+  scheduler_timescale: 3000
+  scheduler_warmup: 10
+  scheduler_cooldown: 10
+
+  gradient_accumulation_steps: 1
+
+  train_batch_size: 4
+  val_batch_size: 4
+
+  collate_fn:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: ${scratch.hybrid_repeats}
+    dict_key: all
+    with_seg_masks: ${scratch.enable_segmentation}
+
+  collate_fn_val:
+    _target_: sam3.train.data.collator.collate_fn_api
+    _partial_: true
+    repeats: ${scratch.hybrid_repeats}
+    dict_key: all
+    with_seg_masks: ${scratch.enable_segmentation}
+
+trainer:
+  _target_: sam3.train.trainer.Trainer
+  skip_saving_ckpts: False
+  empty_gpu_mem_cache_after_eval: True
+  skip_first_val: True
+  max_epochs: 15
+  accelerator: cuda
+  seed_value: 1230
+  val_epoch_freq: 2
+  mode: train
+  gradient_accumulation_steps: ${scratch.gradient_accumulation_steps}
+
+  env_variables:
+    # =========================
+    # Version A baseline setting
+    # =========================
+    # 保持和 dlrsd_v0a_seghead_only_4x4090.yaml 一致：
+    # 不训练 soft prompt，不解冻 decoder，只训练 segmentation head / pixel decoder 路径。
+    SAM3_TEXT_UNFREEZE_PRESET: "head_prompt"
+    SAM3_RS_PROMPT_TUNING: "none"
+
+    # 保持 Version 0-A 的 SAM3 head 学习率不变，方便和 baseline 公平比较。
+    SAM3_HEAD_LR: "1e-5"
+    SAM3_PIXEL_DECODER_LR: "1e-5"
+
+    # =========================
+    # SR feature coupling setting
+    # =========================
+    # 训练版 SR 注入开关：
+    # 需要你在 sam3/model/rs_prompt_semantic_model.py 中读取这些环境变量。
+    SAM3_RS_USE_SR: "1"
+
+    # 使用 TTST 作为冻结 SR feature extractor。
+    SAM3_RS_SR_BACKBONE: "ttst"
+    SAM3_RS_SR_CKPT: ${paths.sr_ckpt}
+
+    # 第一版不要给 TTST 喂 1008，先用 256 提取结构特征，显存更稳。
+    SAM3_RS_SR_INPUT_SIZE: "256"
+    SAM3_RS_SR_DIM: "180"
+
+    # SR adapter 设置。
+    SAM3_RS_SR_NUM_LEVELS: "3"
+    SAM3_RS_SR_RES_SCALE: "0.1"
+    SAM3_RS_SR_INIT_SCALE: "1e-3"
+
+    # 只新增 sr_adapter 可训练参数。
+    # 需要你的 optimizer / 参数分组代码识别 sr_adapter.* 并使用这个 lr。
+    SAM3_SR_ADAPTER_LR: "1e-4"
+
+  distributed:
+    backend: nccl
+    find_unused_parameters: True
+    gradient_as_bucket_view: True
+
+  loss:
+    all: ${dlrsd_train.loss}
+    default:
+      _target_: sam3.train.loss.sam3_loss.DummyLoss
+
+  data:
+    train:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        img_folder: ${paths.train_img_dir}
+        ann_file: ${paths.train_ann}
+        transforms: ${dlrsd_train.train_transforms}
+        disable_geometry_prompt: true
+        query_input_box_format: xywh
+        include_negative_queries: true
+        add_hard_negatives: false
+        hard_negative_ratio: 0.0
+
+      shuffle: True
+      batch_size: ${scratch.train_batch_size}
+      num_workers: ${scratch.num_train_workers}
+      pin_memory: True
+      drop_last: True
+      collate_fn: ${scratch.collate_fn}
+
+    val:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.rs_single_query_dataset.RSSingleQueryDataset
+        transforms: ${dlrsd_train.val_transforms}
+        img_folder: ${paths.val_img_dir}
+        query_input_box_format: xywh
+        ann_file: ${paths.val_ann}
+        disable_geometry_prompt: true
+        include_negative_queries: false
+        add_hard_negatives: false
+
+      shuffle: False
+      batch_size: ${scratch.val_batch_size}
+      num_workers: ${scratch.num_val_workers}
+      pin_memory: True
+      drop_last: False
+      collate_fn: ${scratch.collate_fn_val}
+
+  model:
+    _target_: sam3.model_builder.build_rs_prompt_semantic_model
+    bpe_path: ${paths.bpe_path}
+    device: cpu
+    eval_mode: false
+    enable_segmentation: ${scratch.enable_segmentation}
+    checkpoint_path: ${paths.sam3_ckpt}
+    load_from_HF: false
+
+  meters: null
+
+  optim:
+    amp:
+      enabled: True
+      amp_dtype: bfloat16
+
+    optimizer:
+      _target_: torch.optim.AdamW
+
+    gradient_clip:
+      _target_: sam3.train.optim.optimizer.GradientClipper
+      max_norm: 0.1
+      norm_type: 2
+
+    param_group_modifiers: null
+
+    options:
+      lr:
+        - scheduler:
+            _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
+            base_lr: 1.0e-5
+            timescale: ${scratch.scheduler_timescale}
+            warmup_steps: ${scratch.scheduler_warmup}
+            cooldown_steps: ${scratch.scheduler_cooldown}
+
+      weight_decay:
+        - scheduler:
+            _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+            value: 0.0
+
+  checkpoint:
+    save_dir: ${launcher.experiment_log_dir}/checkpoints
+    save_freq: 0
+
+  logging:
+    tensorboard_writer:
+      _target_: sam3.train.utils.logger.make_tensorboard_logger
+      log_dir: ${launcher.experiment_log_dir}/tensorboard
+      flush_secs: 120
+      should_log: True
+    wandb_writer: null
+    log_dir: ${launcher.experiment_log_dir}/logs
+    log_freq: 50
+  

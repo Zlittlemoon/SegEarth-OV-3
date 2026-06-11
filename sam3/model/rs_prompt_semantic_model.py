@@ -9,6 +9,8 @@ import torch.nn as nn
 
 from sam3.model.geometry_encoders import Prompt
 from sam3.model.sam3_image import Sam3Image
+from sam3.model.sr_feature_adapter import SRFeatureAdapter
+from sam3.model.ttst_feature_extractor import TTSTFeatureExtractor
 
 
 class RSPromptSemanticModel(nn.Module):
@@ -31,6 +33,20 @@ class RSPromptSemanticModel(nn.Module):
         self.debug_every = int(os.environ.get("SAM3_RS_DEBUG_EVERY", "100"))
         self._forward_calls = 0
         self._debug_this_step = False
+        self.use_sr = os.environ.get("SAM3_RS_USE_SR", "0") == "1"
+        self.sr_ckpt_path = os.environ.get("SAM3_RS_SR_CKPT", "")
+        self.sr_input_size = int(os.environ.get("SAM3_RS_SR_INPUT_SIZE", "256"))
+        self.sr_dim = int(os.environ.get("SAM3_RS_SR_DIM", "180"))
+
+        # debug print 必须放在 sr_ckpt_path 赋值之后
+        if int(os.environ.get("LOCAL_RANK", "0")) == 0:
+            print(
+                f"[SR DEBUG] use_sr={self.use_sr}, "
+                f"SAM3_RS_USE_SR={os.environ.get('SAM3_RS_USE_SR')}, "
+                f"sr_ckpt={self.sr_ckpt_path}, "
+                f"sr_input_size={self.sr_input_size}, "
+                f"sr_dim={self.sr_dim}"
+            )
 
         if getattr(self.sam3, "segmentation_head", None) is None:
             raise ValueError(
@@ -93,9 +109,36 @@ class RSPromptSemanticModel(nn.Module):
         if self.prompt_only:
             self.freeze_sam3_and_train_prompt_only()
 
+        if self.use_sr:
+            if len(self.sr_ckpt_path) == 0:
+                raise ValueError("SAM3_RS_USE_SR=1 requires SAM3_RS_SR_CKPT")
+
+            self.sr_extractor = TTSTFeatureExtractor(
+                ckpt_path=self.sr_ckpt_path,
+                input_size=self.sr_input_size,
+                sr_dim=self.sr_dim,
+                device=str(self.device),
+            )
+
+            self.sr_adapter = SRFeatureAdapter(
+                sr_dim=self.sr_dim,
+                sam_dim=256,
+                num_levels=3,
+                residual_scale=float(os.environ.get("SAM3_RS_SR_RES_SCALE", "0.1")),
+                init_scale=float(os.environ.get("SAM3_RS_SR_INIT_SCALE", "1e-3")),
+            ).to(self.device)
+        else:
+            self.sr_extractor = None
+            self.sr_adapter = None
+
     @property
     def device(self):
-        return self.sam3.device
+        # Do not rely on self.sam3.device because it may stay as "cpu"
+        # after Trainer moves the module to cuda:local_rank.
+        try:
+            return next(self.parameters()).device
+        except StopIteration:
+            return torch.device("cpu")
 
     def back_convert(self, x):
         return self.sam3.back_convert(x)
@@ -390,6 +433,25 @@ class RSPromptSemanticModel(nn.Module):
             text_outputs["language_features"] = language_features + soft_prompt
         return text_outputs
 
+    def _apply_sr_to_backbone_out(self, backbone_out, images):
+        if not getattr(self, "use_sr", False):
+            return backbone_out
+
+        if "backbone_fpn" not in backbone_out:
+            raise KeyError("backbone_out has no key 'backbone_fpn', cannot apply SR feature adapter.")
+
+        # SR 模型冻结，不反传
+        with torch.no_grad():
+            sr_feat = self.sr_extractor(images)
+
+        # SR adapter 要训练，不能放到 no_grad
+        fpn_feats = backbone_out["backbone_fpn"]
+        enhanced_fpn = self.sr_adapter(fpn_feats, sr_feat)
+
+        backbone_out = dict(backbone_out)
+        backbone_out["backbone_fpn"] = enhanced_fpn
+        return backbone_out
+
     def _print_trainable_summary_once(self):
         if hasattr(self, "_printed_trainable_summary") and self._printed_trainable_summary:
             return
@@ -522,16 +584,36 @@ class RSPromptSemanticModel(nn.Module):
         # 3) official backbone path
         backbone_out = {"img_batch_all_stages": images}
         backbone_out.update(self.sam3.backbone.forward_image(images))
+        # SR feature injection
+        backbone_out = self._apply_sr_to_backbone_out(backbone_out, images)
 
-        device = self.device
+        # Use the actual image tensor device in the current DDP process.
+        # This avoids CPU token ids with CUDA text embedding weights.
+        device = images.device
+
         pre_text_soft_prompt = None
         if self.soft_prompt_pos == "pre_text":
             pre_text_soft_prompt = self._build_pre_text_soft_prompt(batch_size=len(captions))
+            if pre_text_soft_prompt is not None:
+                pre_text_soft_prompt = pre_text_soft_prompt.to(device=device)
+        
+        if self._debug_this_step:
+            try:
+                emb_dev = self.sam3.backbone.language_backbone.encoder.token_embedding.weight.device
+            except Exception:
+                emb_dev = None
+            print(
+                f"[SR/TEXT DEVICE DEBUG] images.device={images.device}, "
+                f"forward_text.device={device}, "
+                f"token_embedding.device={emb_dev}"
+            )
+            
         text_outputs = self.sam3.backbone.forward_text(
             captions,
             device=device,
             soft_prompt_embed=pre_text_soft_prompt,
         )
+
         if self.soft_prompt_pos == "post_text_add":
             text_outputs = self._apply_post_text_soft_prompt(text_outputs)
         backbone_out.update(text_outputs)

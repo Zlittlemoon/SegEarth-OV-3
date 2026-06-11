@@ -427,6 +427,39 @@ class UAVidDataset(BaseSegDataset):
 
 
 @DATASETS.register_module()
+class iSAIDSplitDataset(BaseSegDataset):
+    """iSAID split dataset from RSKT/Pi-Seg style D2masks.
+
+    The split masks use contiguous labels 0..14 for the 15 foreground
+    categories. Background/ignore is 255 and is not a semantic class.
+    """
+    METAINFO = dict(
+        classes=(
+            'ship', 'storage tank', 'baseball diamond', 'tennis court',
+            'basketball court', 'ground track field', 'bridge',
+            'large vehicle', 'small vehicle', 'helicopter', 'swimming pool',
+            'roundabout', 'soccer ball field', 'plane', 'harbor'),
+        palette=[
+            [0, 0, 63], [0, 63, 63], [0, 63, 0], [0, 63, 127],
+            [0, 63, 191], [0, 63, 255], [0, 127, 63], [0, 127, 127],
+            [0, 0, 127], [0, 0, 191], [0, 0, 255], [0, 191, 127],
+            [0, 127, 191], [0, 127, 255], [0, 100, 155]])
+
+    def __init__(self,
+                 img_suffix='.png',
+                 seg_map_suffix='.png',
+                 reduce_zero_label=False,
+                 ignore_index=255,
+                 **kwargs) -> None:
+        super().__init__(
+            img_suffix=img_suffix,
+            seg_map_suffix=seg_map_suffix,
+            reduce_zero_label=reduce_zero_label,
+            ignore_index=ignore_index,
+            **kwargs)
+
+
+@DATASETS.register_module()
 class DLRSDDataset(BaseSegDataset):
     """DLRSD dataset.
 

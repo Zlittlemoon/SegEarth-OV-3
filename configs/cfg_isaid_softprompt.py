@@ -5,8 +5,8 @@ model = dict(
     classname_path='./configs/cls_iSAID.txt',
     prob_thd=0.5,
     confidence_threshold=0.4,
-    # slide_stride=1008,
-    # slide_crop=1008,
+    slide_stride=1008,
+    slide_crop=1008,
     # Optional override (already set in base_config_softprompt.py)
     # finetuned_checkpoint_path='outputs/dlrsd_detector_presence_only_instance_maxlogit_nosoft_1xA6000_lr_1e-5_batch4/checkpoints/checkpoint_4.pt',
     use_soft_prompt=True,
@@ -14,7 +14,7 @@ model = dict(
 
 # dataset settings
 dataset_type = 'iSAIDDataset'
-data_root = 'data/isaid_patch'
+data_root = 'data/isaid_full_image'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),

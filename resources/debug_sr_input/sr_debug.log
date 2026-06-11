@@ -1,0 +1,3 @@
+[SR INPUT DEBUG] image=data/DLRSD_split/val/imgs/Airplane08.jpg, original_size=(256, 256), sam3_input_size=(1024, 1024), sr_backend=realesrgan, mae_vs_bicubic=8.2317, max_diff_vs_bicubic=175.0
+[SR INPUT DEBUG] image=data/DLRSD_split/val/imgs/Airplane14.jpg, original_size=(256, 256), sam3_input_size=(1024, 1024), sr_backend=realesrgan, mae_vs_bicubic=6.6881, max_diff_vs_bicubic=153.0
+[SR INPUT DEBUG] image=data/DLRSD_split/val/imgs/Airplane15.jpg, original_size=(256, 256), sam3_input_size=(1024, 1024), sr_backend=realesrgan, mae_vs_bicubic=7.2361, max_diff_vs_bicubic=157.0
