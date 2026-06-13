@@ -1,7 +1,7 @@
 __pycache__
 .vscode/
 .idea/
-data
+data/
 pretrained
 results.xlsx
 work_dirs
@@ -10,3 +10,7 @@ run.sh
 show_dir
 weights
 figs
+outputs/
+dlrsd_text_prompt_exp_log/
+logs/
+check/

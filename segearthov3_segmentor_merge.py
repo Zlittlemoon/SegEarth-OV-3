@@ -20,8 +20,8 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  slide_stride=0,
                  slide_crop=0,
                  confidence_threshold=0.5,
-                 use_sem_seg=True,
-                 use_presence_score=True,
+                 use_sem_seg=False,
+                 use_presence_score=False,
                  use_transformer_decoder=True,
                  **kwargs):
         super().__init__()

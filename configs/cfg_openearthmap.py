@@ -5,8 +5,8 @@ model = dict(
     classname_path='./configs/cls_openearthmap.txt',
     prob_thd=0.1,
     confidence_threshold=0.1,
-    # slide_stride=512,
-    # slide_crop=512,
+    slide_stride=512,
+    slide_crop=512,
 )
 
 # dataset settings
@@ -15,7 +15,7 @@ data_root = 'data/OpenEarthMap'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
+    # dict(type='Resize', scale=(448, 448), keep_ratio=True),
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
