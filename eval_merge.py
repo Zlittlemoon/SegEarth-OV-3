@@ -119,10 +119,10 @@ def main():
                     'Dataset': cfg.dataset_type})
 
     if runner.rank == 0:
-        append_experiment_result('results_excel/results_Instance only.xlsx', [results])
+        append_experiment_result('results_excel/results_baseline.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results_Instance only.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results_baseline.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')

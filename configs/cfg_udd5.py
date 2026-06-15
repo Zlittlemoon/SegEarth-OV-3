@@ -6,6 +6,7 @@ model = dict(
     confidence_threshold=0.5,
     prob_thd=0.1,
     bg_idx=4,
+    use_instance_score=False,
     # slide_stride=512,
     # slide_crop=512,
 )

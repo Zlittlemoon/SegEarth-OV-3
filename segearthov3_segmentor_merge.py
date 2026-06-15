@@ -20,9 +20,10 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  slide_stride=0,
                  slide_crop=0,
                  confidence_threshold=0.5,
-                 use_sem_seg=False,
-                 use_presence_score=False,
+                 use_sem_seg=True,
+                 use_presence_score=True,
                  use_transformer_decoder=True,
+                 use_instance_score=True,   # 新增：False = 去掉 score 缩放
                  **kwargs):
         super().__init__()
         
@@ -47,6 +48,7 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         self.use_sem_seg = use_sem_seg
         self.use_presence_score = use_presence_score
         self.use_transformer_decoder = use_transformer_decoder
+        self.use_instance_score = use_instance_score
 
     def _inference_single_view(self, image):
         """Inference on a single PIL image or crop patch."""
@@ -66,9 +68,7 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                         for inst_id in range(inst_len):
                             instance_logits = inference_state['masks_logits'][inst_id].squeeze()
                             instance_score = inference_state['object_score'][inst_id]
-                            # instance_mask = inference_state['masks'][inst_id].squeeze()
-                            
-                            # Handle potential dimension mismatch if SAM3 output differs slightly
+
                             if instance_logits.shape != (h, w):
                                 instance_logits = F.interpolate(
                                     instance_logits.view(1, 1, *instance_logits.shape), 
@@ -77,17 +77,22 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                                     align_corners=False
                                 ).squeeze()
 
-                            seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score)
+                            # 原代码：instance_logits * instance_score 会把实例幅值压低
+                            # 改动：去掉 score 缩放，让实例头与语义头在相同幅值尺度下竞争
+                            if self.use_instance_score:
+                                seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score)
+                            else:
+                                seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits)
                     
                 if self.use_sem_seg:
                     semantic_logits = inference_state['semantic_mask_logits']
                     if semantic_logits.shape != (h, w):
-                            semantic_logits = F.interpolate(
-                                semantic_logits, 
-                                size=(h, w), 
-                                mode='bilinear', 
-                                align_corners=False
-                            ).squeeze()
+                        semantic_logits = F.interpolate(
+                            semantic_logits, 
+                            size=(h, w), 
+                            mode='bilinear', 
+                            align_corners=False
+                        ).squeeze()
                     
                     seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits)
                 

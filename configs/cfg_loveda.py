@@ -5,6 +5,7 @@ model = dict(
     classname_path='./configs/cls_loveda.txt',
     confidence_threshold=0.5,
     prob_thd=0.5,
+    use_instance_score=False,
     # slide_stride=512,
     # slide_crop=512,
 )

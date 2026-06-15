@@ -5,6 +5,7 @@ model = dict(
     classname_path='./configs/cls_openearthmap.txt',
     prob_thd=0.1,
     confidence_threshold=0.1,
+    use_instance_score=False,
     slide_stride=512,
     slide_crop=512,
 )
