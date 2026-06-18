@@ -24,6 +24,9 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  use_presence_score=True,
                  use_transformer_decoder=True,
                  use_instance_score=True,   # 新增：False = 去掉 score 缩放
+                 use_scale_norm=False,    # 新增：True = sigmoid 尺度统一融合
+                 inst_temp=1.0,          # 新增：实例头温度，固定 1.0 作锚点
+                 sem_temp=1.0,           # 新增：语义头温度，扫这个对齐到实例头
                  **kwargs):
         super().__init__()
         
@@ -49,6 +52,9 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         self.use_presence_score = use_presence_score
         self.use_transformer_decoder = use_transformer_decoder
         self.use_instance_score = use_instance_score
+        self.use_scale_norm = use_scale_norm
+        self.inst_temp = inst_temp
+        self.sem_temp = sem_temp        
 
     def _inference_single_view(self, image):
         """Inference on a single PIL image or crop patch."""
@@ -61,6 +67,10 @@ class SegEarthOV3Segmentation(BaseSegmentor):
             for query_idx, query_word in enumerate(self.query_words):
                 self.processor.reset_all_prompts(inference_state)
                 inference_state = self.processor.set_text_prompt(state=inference_state, prompt=query_word)
+
+                # 用两个独立张量分别累积 instance 和 semantic，避免提前混入同一尺度
+                inst_term = None
+                sem_term = None
 
                 if self.use_transformer_decoder:
                     if inference_state['masks_logits'].shape[0] > 0:
@@ -76,14 +86,14 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                                     mode='bilinear', 
                                     align_corners=False
                                 ).squeeze()
-
-                            # 原代码：instance_logits * instance_score 会把实例幅值压低
-                            # 改动：去掉 score 缩放，让实例头与语义头在相同幅值尺度下竞争
+                                
+                            # use_instance_score 控制是否用 score 缩放实例幅值
                             if self.use_instance_score:
-                                seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits * instance_score)
+                                cur = instance_logits * instance_score
                             else:
-                                seg_logits[query_idx] = torch.max(seg_logits[query_idx], instance_logits)
-                    
+                                cur = instance_logits
+                            inst_term = cur if inst_term is None else torch.max(inst_term, cur)
+
                 if self.use_sem_seg:
                     semantic_logits = inference_state['semantic_mask_logits']
                     if semantic_logits.shape != (h, w):
@@ -93,9 +103,27 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                             mode='bilinear', 
                             align_corners=False
                         ).squeeze()
-                    
-                    seg_logits[query_idx] = torch.max(seg_logits[query_idx], semantic_logits)
-                
+                    sem_term = semantic_logits
+
+                # ---- 尺度统一融合 ----
+                if self.use_scale_norm:
+                    terms = []
+                    if inst_term is not None:
+                        terms.append(inst_term / self.inst_temp)   # inst_temp 如 1.0
+                    if sem_term is not None:
+                        terms.append(sem_term / self.sem_temp)     # sem_temp 调这个对齐到 inst
+                    if terms:
+                        fused = terms[0]
+                        for t in terms[1:]:
+                            fused = torch.max(fused, t)
+                        seg_logits[query_idx] = fused
+                else:
+                    # 原始行为：直接在 logit 尺度上 max
+                    if inst_term is not None:
+                        seg_logits[query_idx] = torch.max(seg_logits[query_idx], inst_term)
+                    if sem_term is not None:
+                        seg_logits[query_idx] = torch.max(seg_logits[query_idx], sem_term)
+
                 if self.use_presence_score:
                     seg_logits[query_idx] = seg_logits[query_idx] * inference_state["presence_score"]
                 

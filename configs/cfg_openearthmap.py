@@ -5,7 +5,10 @@ model = dict(
     classname_path='./configs/cls_openearthmap.txt',
     prob_thd=0.1,
     confidence_threshold=0.1,
-    use_instance_score=False,
+    use_instance_score=True,
+    use_scale_norm=True,
+    inst_temp=10.0,
+    sem_temp=1.0, 
     slide_stride=512,
     slide_crop=512,
 )
@@ -23,8 +26,8 @@ test_pipeline = [
 
 test_dataloader = dict(
     batch_size=1,
-    num_workers=4,
-    persistent_workers=True,
+    num_workers=0,
+    persistent_workers=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=dataset_type,
