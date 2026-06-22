@@ -2,8 +2,8 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 
-img_path = 'resources/loveda_2524.png'  # <-- 和你 demo 中一样的路径
-gt_path = 'data/LoveDA/ann_dir/val/2524.png'                  # <-- 你的 GT 路径
+img_path = 'data/Potsdam/img_dir/val/2_13_5120_0_5632_512.png'  # <-- 和你 demo 中一样的路径
+gt_path = 'data/Potsdam/ann_dir/val/2_13_5120_0_5632_512.png'                  # <-- 你的 GT 路径
 
 # 读取原图
 img = Image.open(img_path)  # <-- 新增这行
@@ -29,6 +29,6 @@ ax[1].set_title('Ground Truth (viridis)')
 ax[1].axis('off')
 
 plt.tight_layout()
-plt.savefig('loveda_2524_original_and_gt_viridis.png', bbox_inches='tight', dpi=300)
+plt.savefig('resources/Potsdam_2_13_5120_0_5632_512_original_and_gt_viridis.png', bbox_inches='tight', dpi=300)
 plt.show()
 print("GT unique values:", np.unique(gt_array))

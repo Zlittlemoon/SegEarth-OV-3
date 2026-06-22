@@ -12,7 +12,7 @@ model = dict(
 
 # dataset settings
 dataset_type = 'PotsdamDataset'
-data_root = 'data/potsdam_full_image'
+data_root = 'data/Potsdam'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),

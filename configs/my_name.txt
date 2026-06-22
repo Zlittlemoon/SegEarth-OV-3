@@ -1,9 +1,6 @@
-background
-bareland,barren
-grass
 road
+building
+grass
+tree
 car
-tree,forest
-water,river
-cropland
-building,roof,house
+clutter

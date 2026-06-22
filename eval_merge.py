@@ -115,14 +115,15 @@ def main():
     runner = Runner.from_cfg(cfg)
     results = runner.test()
 
-    results.update({'Model': cfg.model.model_type,
+    infer_mode = cfg.model.get('sam3_infer_mode', 'serial')
+    results.update({'Model': f"{cfg.model.model_type}-{infer_mode}",
                     'Dataset': cfg.dataset_type})
 
     if runner.rank == 0:
-        append_experiment_result('results_excel/results_Instance only.xlsx', [results])
+        append_experiment_result('results_excel/results_verfify_batch_parallel_inference.xlsx', [results])
 
     if runner.rank == 0:
-        with open(os.path.join(cfg.work_dir, 'results_Instance only.txt'), 'a') as f:
+        with open(os.path.join(cfg.work_dir, 'results_verfify_batch_parallel_inference.txt'), 'a') as f:
             f.write(os.path.basename(args.config).split('.')[0] + '\n')
             for k, v in results.items():
                 f.write(k + ': ' + str(v) + '\n')

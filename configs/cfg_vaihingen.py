@@ -12,7 +12,7 @@ model = dict(
 
 # dataset settings
 dataset_type = 'ISPRSDataset'
-data_root = 'data/vaihingen_full_image'
+data_root = 'data/Vaihingen'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),

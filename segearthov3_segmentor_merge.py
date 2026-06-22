@@ -9,6 +9,7 @@ from PIL import Image
 
 from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
+from sam3.model.data_misc import FindStage, interpolate
 
 
 @MODELS.register_module()
@@ -20,9 +21,10 @@ class SegEarthOV3Segmentation(BaseSegmentor):
                  slide_stride=0,
                  slide_crop=0,
                  confidence_threshold=0.5,
-                 use_sem_seg=False,
-                 use_presence_score=False,
+                 use_sem_seg=True,
+                 use_presence_score=True,
                  use_transformer_decoder=True,
+                 sam3_infer_mode='serial',  # 'serial' (default, unchanged) or 'batch'
                  **kwargs):
         super().__init__()
         
@@ -47,9 +49,80 @@ class SegEarthOV3Segmentation(BaseSegmentor):
         self.use_sem_seg = use_sem_seg
         self.use_presence_score = use_presence_score
         self.use_transformer_decoder = use_transformer_decoder
+        assert sam3_infer_mode in ('serial', 'batch')
+        self.sam3_infer_mode = sam3_infer_mode
+
+    def _inference_single_view_batch(self, image):
+        """Batched (one forward_grounding for all prompts) three-head fusion.
+
+        Mirrors the serial path's fusion exactly, but runs the grounding once
+        with img_ids=[0]*N, text_ids=[0..N-1].  The instance head needs the
+        per-prompt confidence (keep) filter applied row by row, because each
+        prompt keeps a different number of instances — this is the part that
+        the semantic-only check did NOT exercise.
+        """
+        w, h = image.size
+        n = self.num_queries
+        seg_logits = torch.zeros((n, h, w), device=self.device)
+        thr = self.processor.confidence_threshold
+
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            state = self.processor.set_image(image)
+            text_outputs = self.processor.model.backbone.forward_text(
+                self.query_words, device=self.device)
+            state["backbone_out"].update(text_outputs)
+            geometric_prompt = self.processor.model._get_dummy_prompt(num_prompts=n)
+            find_stage = FindStage(
+                img_ids=torch.zeros(n, device=self.device, dtype=torch.long),
+                text_ids=torch.arange(n, device=self.device, dtype=torch.long),
+                input_boxes=None, input_boxes_mask=None, input_boxes_label=None,
+                input_points=None, input_points_mask=None,
+            )
+            outputs = self.processor.model.forward_grounding(
+                backbone_out=state["backbone_out"],
+                find_input=find_stage,
+                geometric_prompt=geometric_prompt,
+                find_target=None,
+            )
+
+            pred_logits = outputs["pred_logits"]            # (N, Q, 1)
+            pred_masks = outputs["pred_masks"]              # (N, Q, h', w')
+            presence = outputs["presence_logit_dec"].sigmoid()  # (N, 1)
+            # (N, Q): object prob = sigmoid(logit) * presence, matches serial
+            obj_probs = (pred_logits.sigmoid() * presence.unsqueeze(1)).squeeze(-1)
+
+            sem_all = None
+            if self.use_sem_seg:
+                sem_all = interpolate(
+                    outputs["semantic_seg"], (h, w),
+                    mode="bilinear", align_corners=False).sigmoid().squeeze(1)  # (N,h,w)
+
+            for qi in range(n):
+                if self.use_transformer_decoder:
+                    keep = obj_probs[qi] > thr                 # (Q,)
+                    if keep.any():
+                        masks = pred_masks[qi][keep]           # (K, h', w')
+                        masks = interpolate(
+                            masks.unsqueeze(1), (h, w),
+                            mode="bilinear", align_corners=False).sigmoid().squeeze(1)  # (K,h,w)
+                        scores = obj_probs[qi][keep]           # (K,)
+                        # max over instances of (mask * score); zeros base is a no-op
+                        folded = (masks * scores[:, None, None]).max(0)[0]
+                        seg_logits[qi] = torch.max(seg_logits[qi], folded)
+
+                if self.use_sem_seg:
+                    seg_logits[qi] = torch.max(seg_logits[qi], sem_all[qi])
+
+                if self.use_presence_score:
+                    seg_logits[qi] = seg_logits[qi] * presence[qi].squeeze()
+
+        return seg_logits
 
     def _inference_single_view(self, image):
         """Inference on a single PIL image or crop patch."""
+        if self.sam3_infer_mode == 'batch':
+            return self._inference_single_view_batch(image)
+            
         w, h = image.size
         seg_logits = torch.zeros((self.num_queries, h, w), device=self.device)
 
