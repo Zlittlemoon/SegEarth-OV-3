@@ -1,0 +1,140 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+
+========================================================================
+CAFR Diagnostic v1
+Config       : configs/cfg_openearthmap.py
+Classes ( 9) : ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+global_thd   : 0.1   bg_idx=0
+λ-rule λ     : 0.2   (τ_c = 0.20·0.1 = 0.0200)
+elig_mode    : release_band
+eligibility  : p50 AND supp_mass≥0.03
+limit        : 80 images
+========================================================================
+
+  processed 50 images ...
+Total images : 80   valid pixels : 82,720,256
+
+========================================================================
+STAGE 0 — Background Gate Policy  (diagnostic suggestion only)
+========================================================================
+  -- load statistics (descriptive only) --
+  r_gate          : 4.63%  (raw_top1≠bg but score<0.1, gated to bg)
+  r_argbg         : 0.43%  (raw_top1=background directly)
+  gate-bg mean sc : 0.0722   argmax-bg mean sc : 0.0816
+  gate entropy(n) : 0.805  (0=one class dominates gated pixels, 1=uniform → risky to release)
+
+  -- decisive probe: effect of turning the gate OFF (naive-q0) --
+  baseline mIoU   : 45.78%
+  gate-off  mIoU  : 53.05%   Δ=+7.27%
+
+  → Policy suggestion: [semantic-bg dominant (suggestion)]
+    Turning the gate off IMPROVES mIoU → the global gate is over-suppressing reliable foreground. Consider weakening or disabling it, while still applying class-selective recovery.
+    (high gate entropy 0.81 would further argue for keeping the gate.)
+
+========================================================================
+STAGE 1 — Class Eligibility Selector
+========================================================================
+  elig_mode    : release_band  (Stage 0 policy: semantic-bg dominant (suggestion))
+  score_safety = 1 - P(score < τ/2 | suppressed)  [v1 proxy]
+  rel_band = P(λτ ≤ score < τ | class)   high_anchor = P(score ≥ τ | class)  [v2 release-band; λτ=0.0200, τ=0.1]
+  deep_noise = P(score < λτ | class)  (λ-rule never releases this mass)
+  gmm_tau = GMM crossing on suppressed scores (risk signal in uncertainty-bg mode)
+  band_* columns computed on RELEASE BAND only: raw_top1=c ∧ λτ ≤ score < τ
+  band_mg  = mean(top1-top2) in band    band_mg25 = q25 of same
+  band_bg  = mean(top1-bg)   in band    band_bg25 = q25 of same
+  t2_bg    = P(top2_class = background | band)  (runner-up is bg → release risky)
+  t2_entr  = entropy of top2_class distribution in band
+             (high entropy → class confused with many others → risky)
+  n_band guard: classes with <100 band pixels show 'nan' for band_* / t2_*
+  spatial columns (radius=5px, band pixels only):
+    anc_tch  = P(band pixel within 5px of own-class anchor)
+    isl_rt   = P(band pixel in CC not touching own-class anchor)
+    cmp_tch  = P(band pixel within 5px of ANY other-fg anchor)
+    t2c_tch  = P(band pixel within 5px of runner-up class anchor)
+    anc_coh  = anc_tch x (1-isl_rt)  [spatial hard-filter signal, semantic-bg mode]
+    sp_sc    = anc_tch x (1-isl_rt) x (1-cmp_tch)  [diagnostic only; cmp_tch saturates on OEM]
+  class                n_win     n_band rel_bnd hi_anch  gmm_tau  band_mg band_mg25  band_bg band_bg25   t2_bg t2_entr    elig anc_tch isl_rt cmp_tch t2c_tch anc_coh  sp_sc
+  bareland         3,834,386    575,561  0.1501  0.8493   0.0825   0.0158    0.0064   0.0662    0.0473  0.0002  0.7023  0.1275  0.2459 0.5137  0.6294  0.2669  0.1196 0.0443
+  grass           13,521,261    466,211  0.0345  0.9636   0.0762   0.0179    0.0063   0.0659    0.0521  0.0003  0.7342  0.0332  0.6741 0.0860  0.6907  0.2629  0.6161 0.1906
+  pavement        10,554,550    925,553  0.0877  0.9122   0.0856   0.0139    0.0048   0.0697    0.0583  0.0000  0.4798  0.0800  0.7084 0.0805  0.6557  0.2813  0.6513 0.2242
+  road             9,038,345    881,247  0.0975  0.9021   0.0862   0.0164    0.0047   0.0648    0.0521  0.0002  0.5547  0.0880  0.3976 0.2252  0.7530  0.3647  0.3080 0.0761
+  tree            12,129,640    164,815  0.0136  0.9862   0.0621   0.0169    0.0058   0.0636    0.0509  0.0003  0.7576  0.0134  0.7539 0.0808  0.6914  0.3343  0.6930 0.2139
+  water            1,282,940      6,774  0.0053  0.9947   0.0870   0.0190    0.0067   0.0743    0.0636  0.0001  0.7676  0.0053  0.5797 0.3180  0.6603  0.3880  0.3954 0.1343
+  cropland         8,418,858     78,252  0.0093  0.9905   0.0309   0.0160    0.0064   0.0682    0.0591  0.0251  0.8140  0.0092  0.4093 0.3699  0.8454  0.4592  0.2579 0.0399
+  building        23,581,338    685,763  0.0291  0.9707   0.0865   0.0211    0.0078   0.0636    0.0497  0.0019  0.6629  0.0282  0.7600 0.0575  0.5273  0.2295  0.7163 0.3386
+
+  Selection rule: eligibility ≥ p50=0.0307  AND  suppressed_mass ≥ 0.03
+  Eligible classes: ['bareland', 'grass', 'pavement', 'road']
+
+  [Spatial hard filter]  anchor_coherence ≥ 0.5  (semantic-bg mode, radius=5px)
+    Removed by spatial filter: ['bareland', 'road']
+  Eligible after spatial filter: ['grass', 'pavement']
+
+========================================================================
+STAGE 2 — Threshold Estimators (eligible classes only)
+========================================================================
+  Otsu/GMM estimated on SUPPRESSED scores only (score<global_thd) and clamped ≤ 0.1.
+  Rationale: recovery must LOWER the gate; estimating on the full winner distribution
+  would yield τ>global_thd (raising the gate — the quantile failure mode).
+  class           hand-tuned    λ-rule      Otsu       GMM    n_supp  gmm_mu_lo  gmm_mu_hi  conv
+  grass               0.0200    0.0200    0.0605    0.0762   491,920     0.0585     0.0870     Y
+  pavement            0.0200    0.0200    0.0723    0.0856   926,874     0.0689     0.0922     Y
+
+  Non-eligible (kept at global_thd=0.1):
+    bareland      : hand-tuned=0.1000 (=global)
+    road          : hand-tuned=0.1000 (=global)
+    tree          : hand-tuned=0.1000 (=global)
+    water         : hand-tuned=0.1000 (=global)
+    cropland      : hand-tuned=0.1000 (=global)
+    building      : hand-tuned=0.1000 (=global)
+
+========================================================================
+EVALUATION — mIoU comparison
+========================================================================
+  Baseline mIoU  : 45.78%  fg-mIoU=50.29%
+
+  Naive quantile (q=0.00, all-class gate off):
+  [naive-q0]  mIoU=53.05%  fg-mIoU=49.78%  Δ=+7.27%
+          worst-fg-drop=-3.19%
+
+  Eligibility + λ-rule:
+  [Eligibility + λ-rule]  mIoU=46.64%  fg-mIoU=50.67%  Δ=+0.86%
+          worst-fg-drop=+0.00%
+
+  Eligibility + Otsu  :
+  [Eligibility + Otsu]  mIoU=46.30%  fg-mIoU=50.54%  Δ=+0.52%
+          worst-fg-drop=+0.00%
+
+  Eligibility + GMM   :
+  [Eligibility + GMM]  mIoU=46.08%  fg-mIoU=50.44%  Δ=+0.30%
+          worst-fg-drop=+0.00%
+
+  Hand-tuned reference:
+  [Hand-tuned reference]  mIoU=46.64%  fg-mIoU=50.67%  Δ=+0.86%
+          worst-fg-drop=+0.00%
+
+========================================================================
+SUMMARY — Per-class IoU across all methods
+========================================================================
+  class             baseline    naive-q0      λ-rule        Otsu         GMM  hand-tuned
+  --------------------------------------------------------------------------------------
+  background            9.68       79.21       14.33       12.33       11.13       14.33
+  bareland              9.72        8.28        9.72        9.72        9.72        9.72
+  grass                47.14       47.67       47.74       47.65       47.52       47.74
+  pavement             28.32       30.81       30.80       29.85       29.19       30.80
+  road                 45.71       42.52       45.71       45.71       45.71       45.71
+  tree                 62.09       61.82       62.09       62.09       62.09       62.09
+  water                79.90       79.62       79.90       79.90       79.90       79.90
+  cropland             54.05       53.71       54.05       54.05       54.05       54.05
+  building             75.37       73.80       75.37       75.37       75.37       75.37
+  --------------------------------------------------------------------------------------
+  mIoU                 45.78       53.05       46.64       46.30       46.08       46.64
+  fg-mIoU              50.29       49.78       50.67       50.54       50.44       50.67
+
+  Eligible classes: ['grass', 'pavement']
+  λ=0.2, τ_global=0.1, λ·τ_global=0.0200
+
+  Consistency check (does λ ≈ Otsu ≈ hand-tuned?):
+    grass           λ=0.0200  Otsu=0.0605  GMM=0.0762  hand-tuned=0.0200
+    pavement        λ=0.0200  Otsu=0.0723  GMM=0.0856  hand-tuned=0.0200
