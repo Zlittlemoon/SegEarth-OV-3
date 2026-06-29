@@ -1,0 +1,478 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+Config  : configs/cfg_loveda.py
+Classes (7): ['background', 'building', 'road', 'water', 'barren', 'forest', 'agricultural']
+prob_thd=0.5  bg_idx=0
+margin_thr sweep: [0.05, 0.1, 0.2, 0.3]
+Limit   : all images
+
+  processed 50 images ...
+  processed 100 images ...
+  processed 150 images ...
+  processed 200 images ...
+  processed 250 images ...
+  processed 300 images ...
+  processed 350 images ...
+  processed 400 images ...
+  processed 450 images ...
+  processed 500 images ...
+  processed 550 images ...
+  processed 600 images ...
+  processed 650 images ...
+  processed 700 images ...
+  processed 750 images ...
+  processed 800 images ...
+  processed 850 images ...
+  processed 900 images ...
+  processed 950 images ...
+  processed 1000 images ...
+  processed 1050 images ...
+  processed 1100 images ...
+  processed 1150 images ...
+  processed 1200 images ...
+  processed 1250 images ...
+  processed 1300 images ...
+  processed 1350 images ...
+  processed 1400 images ...
+  processed 1450 images ...
+  processed 1500 images ...
+  processed 1550 images ...
+  processed 1600 images ...
+  processed 1650 images ...
+
+Total images: 1669
+
+Baseline mIoU: 47.39%
+
+======================================================================
+
+margin_thr = 0.05
+  Low-margin pixels : 26,923,170  (1.58% of valid)
+    GT==winner (correct, flip=damage): 10,984,136  (40.8%)
+    GT==runnerup (rescuable)         : 10,688,076  (39.7%)
+    GT==other  (lateral)             : 5,250,958  (19.5%)
+  Oracle mIoU : 48.37%   ceiling = +0.98 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    forest           33.84   36.31  +2.48
+    barren           35.76   38.36  +2.60
+    background       45.53   45.53  +0.00
+    agricultural     47.49   48.61  +1.12
+    water            51.43   51.97  +0.54
+    road             53.88   53.99  +0.11
+    building         63.80   63.82  +0.02
+    mIoU             47.39   48.37  +0.98
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    agricultural   -> forest         1,855,257 3,570,8881,297,948+1,715,631      34.2%
+    barren         -> agricultural   2,007,592 2,391,4461,115,960+383,854      45.6%
+    agricultural   -> barren         2,530,336 1,850,0091,108,586-680,327      57.8%
+    forest         -> agricultural   3,071,679 1,466,281 965,779-1,605,398      67.7%
+    agricultural   -> water             19,258 1,048,988 195,664+1,029,730       1.8%
+    road           -> agricultural      23,285    54,822  70,658 +31,537      29.8%
+    road           -> barren            29,523    53,069  34,018 +23,546      35.7%
+    water          -> barren            34,557    53,040  21,158 +18,483      39.4%
+    barren         -> water             20,609    45,882  12,712 +25,273      31.0%
+    building       -> agricultural       5,290    42,054  12,680 +36,764      11.2%
+    barren         -> road              62,323    31,279  45,423 -31,044      66.6%
+    agricultural   -> road              64,519    21,488  74,836 -43,031      75.0%
+    water          -> agricultural   1,159,724    19,652 188,547-1,140,072      98.3%
+    barren         -> forest            10,522    16,820  51,942  +6,298      38.5%
+    forest         -> water                373     5,503     320  +5,130       6.3%
+    agricultural   -> building          59,182     4,090  11,142 -55,092      93.5%
+    forest         -> road                 243     3,898   1,555  +3,655       5.9%
+    forest         -> barren            17,455     3,473  32,870 -13,982      83.4%
+    forest         -> building             169     2,624   1,867  +2,455       6.1%
+    road           -> water                  0       801      48    +801       0.0%
+    building       -> barren                98       600     459    +502      14.0%
+    road           -> forest             4,312       296   1,811  -4,016      93.6%
+    building       -> forest             2,520       285   2,112  -2,235      89.8%
+    road           -> building             136       213     772     +77      39.0%
+    water          -> forest             3,492       183     822  -3,309      95.0%
+    water          -> building               1       173       0    +172       0.6%
+    barren         -> building             372       114     555    -258      76.5%
+    building       -> road                 287       104     662    -183      73.4%
+    building       -> water                270         1       1    -269      99.6%
+    water          -> road                 752         0      51    -752     100.0%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    agricultural   -> forest        3,570,8881,855,257    0.34    21.8%  ★ prime target
+    agricultural   -> barren        1,850,0092,530,336    0.26    40.4%  ★ prime target
+    barren         -> agricultural  2,391,4462,007,592    0.16    63.1%  ○ feasible
+    agricultural   -> water         1,048,988  19,258    0.08     1.3%  ★ prime target
+    forest         -> agricultural  1,466,2813,071,679    0.08    79.7%  △ hard
+    road           -> barren          53,069  29,523    0.01    33.6%  — negligible
+    water          -> barren          53,040  34,557    0.01    31.2%  — negligible
+    barren         -> road            31,279  62,323    0.01    68.7%  — negligible
+    road           -> agricultural    54,822  23,285    0.01    39.5%  — negligible
+    barren         -> water           45,882  20,609    0.01    39.2%  — negligible
+    building       -> agricultural    42,054   5,290    0.00    13.8%  — negligible
+    agricultural   -> road            21,488  64,519    0.00    66.2%  — negligible
+    barren         -> forest          16,820  10,522    0.00    42.7%  — negligible
+    water          -> agricultural    19,6521,159,724    0.00    98.8%  — negligible
+    forest         -> road             3,898     243    0.00     5.7%  — negligible
+    forest         -> barren           3,473  17,455    0.00    80.8%  — negligible
+    forest         -> water            5,503     373    0.00     7.8%  — negligible
+    agricultural   -> building         4,090  59,182    0.00    91.9%  — negligible
+    forest         -> building         2,624     169    0.00     7.1%  — negligible
+    road           -> water              801       0    0.00     0.0%  — negligible
+    building       -> barren             600      98    0.00    10.8%  — negligible
+    road           -> forest             296   4,312    0.00    93.8%  — negligible
+    building       -> forest             285   2,520    0.00    88.2%  — negligible
+    road           -> building           213     136    0.00    43.0%  — negligible
+    water          -> building           173       1    0.00     0.3%  — negligible
+    water          -> forest             183   3,492    0.00    93.9%  — negligible
+    building       -> road               104     287    0.00    70.2%  — negligible
+    barren         -> building           114     372    0.00    81.3%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  agricultural -> forest               0.34       0.34        35.1%
+       2  agricultural -> barren               0.26       0.60        61.2%
+       3  barren -> agricultural               0.16       0.76        78.0%
+       4  agricultural -> water                0.08       0.85        86.3%
+       5  forest -> agricultural               0.08       0.92        94.1%
+       6  road -> barren                       0.01       0.93        95.1%
+    ... (95% of ceiling captured at K=6)
+======================================================================
+
+margin_thr = 0.1
+  Low-margin pixels : 54,112,762  (3.18% of valid)
+    GT==winner (correct, flip=damage): 23,839,476  (44.1%)
+    GT==runnerup (rescuable)         : 18,947,727  (35.0%)
+    GT==other  (lateral)             : 11,325,559  (20.9%)
+  Oracle mIoU : 49.16%   ceiling = +1.77 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    forest           33.84   38.27  +4.44
+    barren           35.76   40.59  +4.82
+    background       45.53   45.53  +0.00
+    agricultural     47.49   49.47  +1.98
+    water            51.43   52.35  +0.93
+    road             53.88   54.09  +0.21
+    building         63.80   63.84  +0.04
+    mIoU             47.39   49.16  +1.77
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    agricultural   -> forest         3,796,923 6,393,5662,828,736+2,596,643      37.3%
+    barren         -> agricultural   4,312,886 4,336,1682,400,045 +23,282      49.9%
+    agricultural   -> barren         5,739,023 3,339,7562,487,107-2,399,267      63.2%
+    forest         -> agricultural   6,432,810 2,352,1151,894,243-4,080,695      73.2%
+    agricultural   -> water             35,818 1,753,303 414,780+1,717,485       2.0%
+    water          -> barren           121,898   122,943  45,722  +1,045      49.8%
+    road           -> agricultural      66,531   114,128 162,397 +47,597      36.8%
+    barren         -> water             31,820   104,478  69,513 +72,658      23.3%
+    barren         -> forest            20,711    84,574  94,657 +63,863      19.7%
+    road           -> barren           103,242    80,594  71,945 -22,648      56.2%
+    building       -> agricultural      16,594    68,516  33,037 +51,922      19.5%
+    barren         -> road             110,088    62,513  98,291 -47,575      63.8%
+    water          -> agricultural   2,664,055    47,253 448,049-2,616,802      98.3%
+    agricultural   -> road             140,742    36,532 139,228-104,210      79.4%
+    forest         -> water              1,187    14,558     739 +13,371       7.5%
+    forest         -> road                 478     8,182   3,195  +7,704       5.5%
+    agricultural   -> building         154,135     6,591  22,378-147,544      95.9%
+    forest         -> barren            56,302     6,360  90,730 -49,942      89.9%
+    forest         -> building             335     6,203   4,068  +5,868       5.1%
+    road           -> water                  6     4,983     122  +4,977       0.1%
+    building       -> barren               508     1,406   1,043    +898      26.5%
+    road           -> forest             8,834       653   3,770  -8,181      93.1%
+    building       -> forest             5,230       577   4,997  -4,653      90.1%
+    road           -> building             305       503   2,032    +198      37.7%
+    water          -> forest            15,583       446   2,129 -15,137      97.2%
+    water          -> building               3       310       4    +307       1.0%
+    building       -> road                 660       258   1,523    -402      71.9%
+    barren         -> building             772       252     949    -520      75.4%
+    water          -> road               1,400         4     126  -1,396      99.7%
+    building       -> water                597         2       4    -595      99.7%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    agricultural   -> forest        6,393,5663,796,923    0.62    24.2%  ★ prime target
+    agricultural   -> barren        3,339,7565,739,023    0.46    46.0%  ★ prime target
+    barren         -> agricultural  4,336,1684,312,886    0.30    67.0%  ○ feasible
+    agricultural   -> water         1,753,303  35,818    0.14     1.5%  ★ prime target
+    forest         -> agricultural  2,352,1156,432,810    0.12    83.7%  △ hard
+    water          -> barren         122,943 121,898    0.02    40.9%  — negligible
+    road           -> barren          80,594 103,242    0.02    53.8%  — negligible
+    barren         -> water          104,478  31,820    0.01    30.4%  — negligible
+    barren         -> road            62,513 110,088    0.01    66.0%  — negligible
+    barren         -> forest          84,574  20,711    0.01    22.6%  — negligible
+    road           -> agricultural   114,128  66,531    0.01    47.2%  — negligible
+    building       -> agricultural    68,516  16,594    0.01    23.5%  — negligible
+    agricultural   -> road            36,532 140,742    0.01    71.5%  — negligible
+    water          -> agricultural    47,2532,664,055    0.00    98.7%  — negligible
+    forest         -> water           14,558   1,187    0.00     9.2%  — negligible
+    forest         -> road             8,182     478    0.00     5.3%  — negligible
+    forest         -> barren           6,360  56,302    0.00    88.1%  — negligible
+    forest         -> building         6,203     335    0.00     6.0%  — negligible
+    road           -> water            4,983       6    0.00     0.2%  — negligible
+    agricultural   -> building         6,591 154,135    0.00    94.8%  — negligible
+    building       -> barren           1,406     508    0.00    21.2%  — negligible
+    road           -> forest             653   8,834    0.00    93.4%  — negligible
+    road           -> building           503     305    0.00    41.5%  — negligible
+    building       -> forest             577   5,230    0.00    88.5%  — negligible
+    water          -> forest             446  15,583    0.00    96.5%  — negligible
+    building       -> road               258     660    0.00    68.6%  — negligible
+    water          -> building           310       3    0.00     0.8%  — negligible
+    barren         -> building           252     772    0.00    80.4%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  agricultural -> forest               0.62       0.62        34.8%
+       2  agricultural -> barren               0.46       1.08        60.8%
+       3  barren -> agricultural               0.30       1.38        77.8%
+       4  agricultural -> water                0.14       1.52        85.5%
+       5  forest -> agricultural               0.12       1.64        92.4%
+       6  water -> barren                      0.02       1.66        93.5%
+       7  road -> barren                       0.02       1.68        94.5%
+       8  barren -> water                      0.01       1.69        95.1%
+    ... (95% of ceiling captured at K=8)
+======================================================================
+
+margin_thr = 0.2
+  Low-margin pixels : 112,730,300  (6.61% of valid)
+    GT==winner (correct, flip=damage): 55,270,210  (49.0%)
+    GT==runnerup (rescuable)         : 31,344,041  (27.8%)
+    GT==other  (lateral)             : 26,116,049  (23.2%)
+  Oracle mIoU : 50.38%   ceiling = +2.99 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    forest           33.84   40.68  +6.84
+    barren           35.76   44.21  +8.45
+    background       45.53   45.53  +0.00
+    agricultural     47.49   50.81  +3.32
+    water            51.43   53.26  +1.83
+    road             53.88   54.25  +0.37
+    building         63.80   63.88  +0.08
+    mIoU             47.39   50.38  +2.99
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    agricultural   -> forest         7,781,737 9,739,9056,169,085+1,958,168      44.4%
+    barren         -> agricultural   9,749,401 7,236,5714,923,111-2,512,830      57.4%
+    agricultural   -> barren        14,025,589 5,787,8166,428,743-8,237,773      70.8%
+    forest         -> agricultural  13,401,692 3,669,1444,158,390-9,732,548      78.5%
+    agricultural   -> water             86,660 3,519,503 956,171+3,432,843       2.4%
+    road           -> agricultural     225,518   260,176 518,578 +34,658      46.4%
+    water          -> barren           257,112   192,766  81,643 -64,346      57.2%
+    barren         -> water             39,634   156,729  92,105+117,095      20.2%
+    barren         -> forest            50,728   137,372 221,923 +86,644      27.0%
+    building       -> agricultural      83,551   136,317 143,909 +52,766      38.0%
+    water          -> agricultural   7,931,488   135,0701,318,998-7,796,418      98.3%
+    road           -> barren           301,539   115,499 137,030-186,040      72.3%
+    barren         -> road             159,120    94,957 190,574 -64,163      62.6%
+    agricultural   -> road             272,176    54,417 279,201-217,759      83.3%
+    forest         -> water              1,896    22,285   4,390 +20,389       7.8%
+    road           -> water                 36    21,290     561 +21,254       0.2%
+    forest         -> road                 997    16,534   7,102 +15,537       5.7%
+    forest         -> building             614    14,680  10,503 +14,066       4.0%
+    forest         -> barren           389,114    11,671 366,247-377,443      97.1%
+    agricultural   -> building         429,642     9,192  51,531-420,450      97.9%
+    building       -> barren             1,504     2,894   4,399  +1,390      34.2%
+    water          -> forest            26,846     2,452  11,303 -24,394      91.6%
+    road           -> forest            19,040     2,054   9,891 -16,986      90.3%
+    road           -> building             838     1,474   6,926    +636      36.2%
+    building       -> forest            12,015     1,428  17,541 -10,587      89.4%
+    building       -> road               1,578       694   3,696    -884      69.5%
+    water          -> building              11       598      21    +587       1.8%
+    barren         -> building           1,271       533   2,133    -738      70.5%
+    water          -> road              17,794        17     282 -17,777      99.9%
+    building       -> water              1,069         3      62  -1,066      99.7%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    agricultural   -> forest        9,739,9057,781,737    0.94    30.2%  ★ prime target
+    agricultural   -> barren        5,787,81614,025,589    0.80    54.8%  ★ prime target
+    barren         -> agricultural  7,236,5719,749,401    0.51    73.5%  ○ feasible
+    agricultural   -> water         3,519,503  86,660    0.27     1.8%  ★ prime target
+    forest         -> agricultural  3,669,14413,401,692    0.19    87.3%  △ hard
+    water          -> barren         192,766 257,112    0.03    48.2%  — negligible
+    road           -> agricultural   260,176 225,518    0.03    57.1%  — negligible
+    road           -> barren         115,499 301,539    0.02    70.3%  — negligible
+    barren         -> forest         137,372  50,728    0.02    30.5%  — negligible
+    barren         -> water          156,729  39,634    0.02    26.6%  — negligible
+    barren         -> road            94,957 159,120    0.02    64.9%  — negligible
+    building       -> agricultural   136,317  83,551    0.01    43.8%  — negligible
+    agricultural   -> road            54,417 272,176    0.01    76.5%  — negligible
+    water          -> agricultural   135,0707,931,488    0.01    98.8%  — negligible
+    road           -> water           21,290      36    0.00     0.2%  — negligible
+    forest         -> road            16,534     997    0.00     5.5%  — negligible
+    forest         -> water           22,285   1,896    0.00     9.6%  — negligible
+    forest         -> barren          11,671 389,114    0.00    96.6%  — negligible
+    forest         -> building        14,680     614    0.00     4.7%  — negligible
+    agricultural   -> building         9,192 429,642    0.00    97.4%  — negligible
+    building       -> barren           2,894   1,504    0.00    28.0%  — negligible
+    road           -> forest           2,054  19,040    0.00    90.6%  — negligible
+    water          -> forest           2,452  26,846    0.00    89.8%  — negligible
+    road           -> building         1,474     838    0.00    40.0%  — negligible
+    building       -> forest           1,428  12,015    0.00    87.7%  — negligible
+    building       -> road               694   1,578    0.00    65.9%  — negligible
+    water          -> building           598      11    0.00     1.8%  — negligible
+    barren         -> building           533   1,271    0.00    76.2%  — negligible
+    water          -> road                17  17,794    0.00    99.9%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  agricultural -> forest               0.94       0.94        31.5%
+       2  agricultural -> barren               0.80       1.74        58.3%
+       3  barren -> agricultural               0.51       2.25        75.5%
+       4  agricultural -> water                0.27       2.53        84.7%
+       5  forest -> agricultural               0.19       2.72        91.1%
+       6  water -> barren                      0.03       2.75        92.2%
+       7  road -> agricultural                 0.03       2.78        93.0%
+       8  road -> barren                       0.02       2.80        93.8%
+       9  barren -> forest                     0.02       2.82        94.4%
+      10  barren -> water                      0.02       2.84        95.0%
+      11  barren -> road                       0.02       2.85        95.6%
+    ... (95% of ceiling captured at K=11)
+======================================================================
+
+margin_thr = 0.3
+  Low-margin pixels : 170,908,258  (10.03% of valid)
+    GT==winner (correct, flip=damage): 86,473,276  (50.6%)
+    GT==runnerup (rescuable)         : 41,116,040  (24.1%)
+    GT==other  (lateral)             : 43,318,942  (25.3%)
+  Oracle mIoU : 51.36%   ceiling = +3.97 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    forest           33.84   43.04  +9.20
+    barren           35.76   46.83  +11.06
+    background       45.53   45.53  +0.00
+    agricultural     47.49   51.88  +4.39
+    water            51.43   53.81  +2.38
+    road             53.88   54.49  +0.61
+    building         63.80   63.94  +0.14
+    mIoU             47.39   51.36  +3.97
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    agricultural   -> forest        12,316,01713,153,18310,866,484+837,166      48.4%
+    barren         -> agricultural  14,967,834 9,581,7127,079,564-5,386,122      61.0%
+    agricultural   -> barren        24,056,196 7,303,12611,362,163-16,753,070      76.7%
+    forest         -> agricultural  17,877,481 4,535,1215,982,733-13,342,360      79.8%
+    agricultural   -> water            161,227 4,384,6491,486,515+4,223,422       3.5%
+    road           -> agricultural     555,556   423,7661,125,766-131,790      56.7%
+    building       -> agricultural     282,733   249,909 411,961 -32,824      53.1%
+    water          -> agricultural  12,384,891   219,7132,239,301-12,165,178      98.3%
+    water          -> barren           439,012   218,540 132,006-220,472      66.8%
+    barren         -> water             44,344   218,443 102,694+174,099      16.9%
+    road           -> water                127   182,391  20,158+182,264       0.1%
+    barren         -> forest            97,793   165,863 360,604 +68,070      37.1%
+    road           -> barren           488,727   150,496 295,442-338,231      76.5%
+    barren         -> road             190,693   114,944 296,242 -75,749      62.4%
+    agricultural   -> road             462,490    72,360 440,265-390,130      86.5%
+    forest         -> building           1,077    27,741  22,990 +26,664       3.7%
+    forest         -> road               1,567    26,611  13,463 +25,044       5.6%
+    forest         -> water              2,789    25,509   8,734 +22,720       9.9%
+    forest         -> barren           864,948    17,504 792,225-847,444      98.0%
+    agricultural   -> building       1,069,053    14,460 103,531-1,054,593      98.7%
+    water          -> forest            44,709     9,373  64,049 -35,336      82.7%
+    road           -> forest            35,168     6,166  28,797 -29,002      85.1%
+    building       -> barren            12,144     3,792  14,935  -8,352      76.2%
+    building       -> forest            23,135     3,627  38,656 -19,508      86.4%
+    road           -> building           1,863     3,170  17,724  +1,307      37.0%
+    barren         -> building           1,797     1,514   4,263    -283      54.3%
+    building       -> road               2,952     1,434   6,802  -1,518      67.3%
+    water          -> building              30       894      75    +864       3.2%
+    water          -> road              85,548        22     485 -85,526     100.0%
+    building       -> water              1,375         7     315  -1,368      99.5%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    agricultural   -> forest        13,153,18312,316,017    1.27    33.7%  ★ prime target
+    agricultural   -> barren        7,303,12624,056,196    1.01    62.4%  ○ feasible
+    barren         -> agricultural  9,581,71214,967,834    0.69    76.3%  △ hard
+    agricultural   -> water         4,384,649 161,227    0.34     2.6%  ★ prime target
+    forest         -> agricultural  4,535,12117,877,481    0.24    88.2%  △ hard
+    road           -> agricultural   423,766 555,556    0.04    66.8%  — negligible
+    water          -> barren         218,540 439,012    0.04    58.3%  — negligible
+    road           -> barren         150,496 488,727    0.03    74.7%  — negligible
+    road           -> water          182,391     127    0.03     0.1%  — negligible
+    barren         -> water          218,443  44,344    0.02    22.6%  — negligible
+    barren         -> forest         165,863  97,793    0.02    41.3%  — negligible
+    barren         -> road           114,944 190,693    0.02    64.6%  — negligible
+    building       -> agricultural   249,909 282,733    0.02    59.0%  — negligible
+    water          -> agricultural   219,71312,384,891    0.01    98.7%  — negligible
+    agricultural   -> road            72,360 462,490    0.01    80.6%  — negligible
+    forest         -> road            26,611   1,567    0.00     5.4%  — negligible
+    forest         -> building        27,741   1,077    0.00     4.4%  — negligible
+    forest         -> barren          17,504 864,948    0.00    97.6%  — negligible
+    forest         -> water           25,509   2,789    0.00    12.0%  — negligible
+    agricultural   -> building        14,4601,069,053    0.00    98.3%  — negligible
+    water          -> forest           9,373  44,709    0.00    79.2%  — negligible
+    road           -> forest           6,166  35,168    0.00    85.6%  — negligible
+    building       -> barren           3,792  12,144    0.00    70.5%  — negligible
+    road           -> building         3,170   1,863    0.00    40.8%  — negligible
+    building       -> forest           3,627  23,135    0.00    84.4%  — negligible
+    building       -> road             1,434   2,952    0.00    63.7%  — negligible
+    barren         -> building         1,514   1,797    0.00    61.4%  — negligible
+    water          -> building           894      30    0.00     3.2%  — negligible
+    water          -> road                22  85,548    0.00   100.0%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  agricultural -> forest               1.27       1.27        32.0%
+       2  agricultural -> barren               1.01       2.28        57.4%
+       3  barren -> agricultural               0.69       2.97        74.9%
+       4  agricultural -> water                0.34       3.31        83.5%
+       5  forest -> agricultural               0.24       3.55        89.5%
+       6  road -> agricultural                 0.04       3.59        90.5%
+       7  water -> barren                      0.04       3.63        91.4%
+       8  road -> barren                       0.03       3.66        92.1%
+       9  road -> water                        0.03       3.68        92.8%
+      10  barren -> water                      0.02       3.71        93.4%
+      11  barren -> forest                     0.02       3.73        94.0%
+      12  barren -> road                       0.02       3.75        94.5%
+      13  building -> agricultural             0.02       3.77        95.0%
+    ... (95% of ceiling captured at K=13)
+======================================================================
+
+Backfill bucket (prob_thd=0.5 reverting foreground top1 -> bg):
+  Backfilled foreground pixels : 665,655,350  (39.06% of valid)
+    GT == raw top1 (threshold-recoverable): 124,561,545  (18.7%)
+  These are recoverable by a class-specific / lower threshold, NOT by top1->top2 rerank.
+
+  Top backfilled classes (raw top1 reverted to bg):
+    class           backfilled    GT==top1  recover%
+    agricultural   265,681,948  57,304,240     21.6%
+    water           44,611,128  22,210,859     49.8%
+    forest          61,702,154  13,090,876     21.2%
+    building        61,637,833  12,951,261     21.0%
+    barren         181,029,568   9,813,557      5.4%
+    road            50,992,719   9,190,752     18.0%
+    high GT==top1 % => a lower threshold for that class recovers it directly (cheap, no CLIP).
+======================================================================
+
+Interpretation guide:
+  NOTE: the oracle is DOUBLE-OPTIMISTIC (perfect rescue + zero damage).
+  A real arbiter (CLIP) also damages GT==winner pixels, so realistic
+  gain is a fraction of the ceiling. Decide on these, not the ceiling alone:
+    1. per-class oracle Δ : which classes actually have headroom
+       (read this, NOT the aggregate rescuable%, since mIoU is per-class).
+    2. a pair with HIGH rescue AND LOW breakeven precision
+       => CLIP has big upside and an easy precision bar => good target.
+    3. if every pair has high breakeven (>~60%) or rescue is tiny
+       => CLIP must be near-perfect to help => not worth building.

@@ -1,0 +1,101 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+========================================================================
+Phase-1A Release-band Raw Multi-Head Collection
+Config        : configs/cfg_openearthmap.py
+Dataset tag   : openearthmap
+Classes (9)  : ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+Targets       : ['grass', 'pavement', 'building', 'road', 'bareland']
+global_thd τ  : 0.1   λτ = 0.0200   bg_idx=0
+Release-band  : raw_top1_post=c ∧ λτ ≤ fused_after_presence < τ
+per-image cap : 2000   global cap : 2,000,000
+Out dir       : verify/rawdiag_oem
+Limit         : all images
+========================================================================
+
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a7fca0000d9e0'
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a80650000d9df'
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a80630000d9dd'
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a7a4c0000d9de'
+  processed 50 images ...
+  processed 100 images ...
+  processed 150 images ...
+  processed 200 images ...
+  processed 250 images ...
+  processed 300 images ...
+  processed 350 images ...
+
+Total images: 384
+
+========================================================================
+SMOKE-TEST DIAGNOSTICS
+  class              band_px      kept        seen inst_raw_mu inst_orig_mu differ?
+  grass            1,740,771   432,522     432,522      0.0848       0.0742     yes
+    -> verify/rawdiag_oem/rawdiag_openearthmap_releaseband_grass.npz  (10.4 MB, 432,522 rows)
+  pavement         3,637,816   493,221     493,221      0.0951       0.0816     yes
+    -> verify/rawdiag_oem/rawdiag_openearthmap_releaseband_pavement.npz  (11.7 MB, 493,221 rows)
+  building         2,011,565   476,313     476,313      0.0820       0.0598     yes
+    -> verify/rawdiag_oem/rawdiag_openearthmap_releaseband_building.npz  (11.7 MB, 476,313 rows)
+  road             2,227,666   421,107     421,107      0.0909       0.0796     yes
+    -> verify/rawdiag_oem/rawdiag_openearthmap_releaseband_road.npz  (9.9 MB, 421,107 rows)
+  bareland         2,239,671   338,776     338,776      0.3575       0.0062     yes
+    -> verify/rawdiag_oem/rawdiag_openearthmap_releaseband_bareland.npz  (7.3 MB, 338,776 rows)
+
+========================================================================
+Smoke-test checks:
+  1. band_px per class should track cafr_diagnose.py's n_band trend.
+  2. inst_raw_mu vs inst_orig_mu must DIFFER (presence^2 split working).
+  3. .npz sizes controllable (raise caps for full val once confirmed).
+========================================================================

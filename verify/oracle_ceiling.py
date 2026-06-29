@@ -26,6 +26,16 @@ Also reports the top winner->runner-up pairs by rescuable pixels with the
 break-even precision a real arbiter must beat, plus a backfill bucket showing how
 many foreground pixels a class-specific threshold could recover for free.
 
+Phase 1B extensions (pair-level mIoU gain + mIoU-based breakeven):
+  For each (winner, runner-up) pair, computes the mIoU gain from a PERFECT
+  arbiter that flips ONLY that pair's rescue pixels (single-pair oracle).
+  Also computes the mIoU-based breakeven precision: the minimum arbiter
+  accuracy on that pair such that the net mIoU change is >= 0. This is found
+  by binary search over arbiter precision p in [0, 1] — at precision p, the
+  arbiter flips all low-margin pixels of the pair, correctly flipping p*rescue
+  to runner-up and incorrectly flipping (1-p)*correct to runner-up (damage).
+  A cumulative gain table shows how much mIoU is captured by the top-K pairs.
+
 Run:
     python verify/oracle_ceiling.py configs/cfg_openearthmap.py --limit 80 --margin-thr 0.2
     python verify/oracle_ceiling.py configs/cfg_loveda.py     --limit 80 --margin-thr 0.2
@@ -140,6 +150,17 @@ def main():
     pair_counts = {t: defaultdict(lambda: np.zeros(3, dtype=np.int64))
                    for t in thresholds}
 
+        # Phase 1B: store per-pixel (gt, baseline_pred, winner, runnerup, category)
+    # for per-pair mIoU oracle recomputation. category: 0=correct, 1=rescue, 2=other.
+    # Also store non-low-margin pixels' (gt, pred) for the full confusion matrix.
+    # We accumulate gt_all / pred_all for the full image set, plus per-threshold
+    # pair membership arrays.
+    gt_all_chunks = []
+    pred_all_chunks = []
+    # per-threshold: list of (winner, runnerup, category, pixel_offset) per lm pixel
+    pair_pixel_data = {t: [] for t in thresholds}
+    pixel_offset = 0  # running offset into the concatenated gt_all/pred_all
+
     # Backfill bucket (margin-independent, separate from the CLIP rerank oracle):
     # pixels whose raw top1 is a FOREGROUND class but prob_thd reverted them to bg.
     # These are recoverable by a class-specific threshold, NOT by top1->top2 rerank.
@@ -168,6 +189,11 @@ def main():
             p_v = base_p[vmask]
             np.add.at(cm_base, (g_v.numpy(), p_v.numpy()), 1)
 
+            # Phase 1B: store full gt/pred for per-pair oracle recomputation
+            V = int(vmask.sum())
+            gt_all_chunks.append(g_v.numpy().astype(np.int32))
+            pred_all_chunks.append(p_v.numpy().astype(np.int32))
+
             # --- top-2 values and indices over valid pixels ---
             flat_v = flat[:, vmask]                             # (C, V)
             top2_v = flat_v.topk(2, dim=0)                     # values (2,V), indices (2,V)
@@ -192,10 +218,11 @@ def main():
                     bf_pair[int(c1)][1] += int(r)
 
             # STRICT candidate for the top1->top2 oracle: only pixels whose final
-            # prediction still equals the RAW top1 and is not background. This
-            # isolates genuine "CLIP picks between top1 and top2" cases and excludes
-            # the backfill-to-bg pixels accounted for separately above.
-            not_backfilled = (p_v == top1_idx) & (p_v != bg_idx)
+            # prediction still equals the RAW top1, top1 is not background, AND
+            # top2 is not background. This isolates genuine foreground-foreground
+            # arbitration cases. Pixels with top2=bg are foreground overprediction
+            # rollback, not fg↔fg confusion — excluded here.
+            not_backfilled = (p_v == top1_idx) & (p_v != bg_idx) & (top2_idx != bg_idx)
 
             for t in thresholds:
                 lm = (margin_v < t) & not_backfilled            # (V,) strict candidate
@@ -227,6 +254,9 @@ def main():
                     # pair-level counts for rescue/correct/other
                     w_np  = w_lm.numpy()
                     ru_np = ru_lm.numpy()
+                    lm_global_idx = torch.nonzero(lm).squeeze(1).numpy() + pixel_offset
+                    cat = np.where(is_correct.numpy(), 0,
+                                   np.where(is_rescue.numpy(), 1, 2))                   
                     for i, (w, ru) in enumerate(zip(w_np, ru_np)):
                         key = (int(w), int(ru))
                         if is_correct[i]:
@@ -236,8 +266,18 @@ def main():
                         else:
                             pair_counts[t][key][2] += 1
 
+                    # Phase 1B: store pixel-level pair data
+                    pair_pixel_data[t].append(np.column_stack([
+                        w_np.astype(np.int32),
+                        ru_np.astype(np.int32),
+                        cat.astype(np.int32),
+                        lm_global_idx.astype(np.int64),
+                    ]))
+
                 # always accumulate cm_oracle (even if no lm pixels in this image)
                 np.add.at(cm_oracle[t], (g_v.numpy(), full_oracle.numpy()), 1)
+            
+            pixel_offset += V
 
         n_done += len(out)
         if n_done % 50 == 0:
@@ -246,6 +286,11 @@ def main():
             break
 
     print(f"\nTotal images: {n_done}\n")
+
+    # Concatenate gt/pred for Phase 1B per-pair oracle
+    gt_flat = np.concatenate(gt_all_chunks)
+    pred_flat = np.concatenate(pred_all_chunks)
+    del gt_all_chunks, pred_all_chunks
 
     base_iou  = iou_from_cm(cm_base)
     base_miou = np.nanmean(base_iou) * 100
@@ -306,6 +351,158 @@ def main():
                   f"{c_cnt:10,}{r_cnt:10,}{o_cnt:8,}{net:+8,}{breakeven*100:10.1f}%")
         print("    breakeven = correct/(correct+rescue): min arbiter precision to")
         print("    net positive on this pair. Low breakeven + high rescue = best target.")
+
+        # =================================================================
+        # Phase 1B: per-pair mIoU oracle gain + mIoU-based breakeven
+        # =================================================================
+        print(f"\n  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---")
+
+        # Build per-pair pixel index arrays
+        if pair_pixel_data[t]:
+            ppd = np.concatenate(pair_pixel_data[t], axis=0)
+        else:
+            ppd = np.empty((0, 4), dtype=np.int64)
+
+        def _cm_from_arrays(gt_arr, pred_arr):
+            return np.bincount(
+                gt_arr.astype(np.int64) * C + pred_arr.astype(np.int64),
+                minlength=C * C).reshape(C, C)
+
+        def _miou(cm):
+            return float(np.nanmean(iou_from_cm(cm)) * 100)
+
+        # For each pair, compute:
+        #   single_pair_oracle_gain: flip ONLY this pair's rescue pixels
+        #   miou_breakeven: binary search for precision p where net mIoU = 0
+        pair_miou_results = []
+        unique_pairs = set()
+        if len(ppd) > 0:
+            for i in range(len(ppd)):
+                unique_pairs.add((int(ppd[i, 0]), int(ppd[i, 1])))
+
+        # Pre-index pairs from ppd for efficiency
+        pair_indices = {}
+        if len(ppd) > 0:
+            for (w, ru) in unique_pairs:
+                mask = (ppd[:, 0] == w) & (ppd[:, 1] == ru)
+                sub = ppd[mask]
+                rescue_idx = sub[sub[:, 2] == 1, 3].astype(np.int64)
+                correct_idx = sub[sub[:, 2] == 0, 3].astype(np.int64)
+                pair_indices[(w, ru)] = (rescue_idx, correct_idx)
+
+        for (w, ru) in unique_pairs:
+            rescue_idx, correct_idx = pair_indices[(w, ru)]
+            nr_pair = len(rescue_idx)
+            nc_pair = len(correct_idx)
+            if nr_pair < 10:
+                continue
+
+            # single-pair oracle: flip only rescue pixels w -> ru
+            # Efficient: compute cm delta from baseline instead of full recount
+
+            def _cm_after_flips(resc_idx, corr_idx_subset):
+                """Baseline cm + delta from flipping specified pixels w -> ru."""
+                cm = cm_base.astype(np.float64).copy()
+                all_idx = np.concatenate([resc_idx, corr_idx_subset]) \
+                    if len(corr_idx_subset) > 0 else resc_idx
+                if len(all_idx) > 0:
+                    gt_flipped = gt_flat[all_idx]
+                    np.add.at(cm, (gt_flipped, w), -1)
+                    np.add.at(cm, (gt_flipped, ru), 1)
+                return cm
+
+            cm_sp = _cm_after_flips(rescue_idx, np.array([], dtype=np.int64))
+            sp_gain = _miou(cm_sp) - base_miou
+
+            # mIoU-based breakeven via symmetric accuracy model.
+            # At accuracy p, the arbiter examines all low-margin pixels of this pair:
+            #   - rescue pixels: p fraction correctly flipped to ru (gain)
+            #   - correct pixels: (1-p) fraction wrongly flipped to ru (damage)
+            # This models a binary classifier with accuracy p on (rescue vs correct).
+            def _miou_at_accuracy(p):
+                n_flip_rescue = int(round(p * nr_pair))
+                n_damage = int(round((1.0 - p) * nc_pair))
+                cm = cm_base.astype(np.float64).copy()
+                if n_flip_rescue > 0:
+                    gt_r = gt_flat[rescue_idx[:n_flip_rescue]]
+                    np.add.at(cm, (gt_r, w), -1)
+                    np.add.at(cm, (gt_r, ru), 1)
+                if n_damage > 0:
+                    gt_c = gt_flat[correct_idx[:n_damage]]
+                    np.add.at(cm, (gt_c, w), -1)
+                    np.add.at(cm, (gt_c, ru), 1)
+                return _miou(cm)
+
+            lo, hi = 0.0, 1.0
+            miou_at_1 = sp_gain + base_miou
+            miou_at_0 = _miou_at_accuracy(0.0)
+            if miou_at_0 >= base_miou:
+                be_acc = 0.0
+            elif miou_at_1 < base_miou:
+                be_acc = float("nan")
+            else:
+                for _ in range(30):
+                    mid = (lo + hi) / 2
+                    if _miou_at_accuracy(mid) >= base_miou:
+                        hi = mid
+                    else:
+                        lo = mid
+                be_acc = hi
+
+            pair_miou_results.append({
+                "w": w, "ru": ru,
+                "n_rescue": nr_pair, "n_correct": nc_pair,
+                "sp_gain": sp_gain,
+                "be_acc": be_acc,
+            })
+
+        # sort by single-pair oracle gain (descending)
+        pair_miou_results.sort(key=lambda r: r["sp_gain"], reverse=True)
+
+        def _fn(v, w=8, p=2):
+            if isinstance(v, float) and v != v:
+                return f"{'nan':>{w}}"
+            return f"{v:{w}.{p}f}"
+
+        print(f"\n  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):")
+        print(f"    {'winner':<14}{'->':^4}{'runnerup':<14}"
+              f"{'rescue':>8}{'correct':>8}{'ΔmIoU':>8}{'BE_acc':>8}  verdict")
+        for r in pair_miou_results[:args.top_pairs]:
+            wn = class_names[r["w"]]
+            run = class_names[r["ru"]]
+            be = r["be_acc"]
+            verdict = ""
+            if r["sp_gain"] > 0.05:
+                if not (be != be) and be < 0.6:
+                    verdict = "★ prime target"
+                elif not (be != be) and be < 0.75:
+                    verdict = "○ feasible"
+                else:
+                    verdict = "△ hard"
+            else:
+                verdict = "— negligible"
+            print(f"    {wn:<14}{'->':^4}{run:<14}"
+                  f"{r['n_rescue']:8,}{r['n_correct']:8,}"
+                  f"{_fn(r['sp_gain'])}{_fn(be*100 if be==be else be, 8, 1)}%"
+                  f"  {verdict}")
+
+        # cumulative gain table: what % of the total oracle ceiling do top-K pairs capture?
+        print(f"\n  Cumulative mIoU gain (greedy top-K pairs, independent approx.):")
+        print(f"    {'K':>4}  {'pair':<30}{'pair ΔmIoU':>11}{'cum ΔmIoU':>11}"
+              f"{'% of ceiling':>13}")
+        total_ceiling = gain  # the all-pair oracle gain
+        cum = 0.0
+        for k, r in enumerate(pair_miou_results):
+            cum += r["sp_gain"]
+            wn = class_names[r["w"]]
+            run = class_names[r["ru"]]
+            pct = cum / total_ceiling * 100 if total_ceiling > 0 else float("nan")
+            if k < 20 or r["sp_gain"] > 0.05:
+                print(f"    {k+1:4d}  {wn+' -> '+run:<30}"
+                      f"{_fn(r['sp_gain'], 11)}{_fn(cum, 11)}{_fn(pct, 12, 1)}%")
+            if pct == pct and pct >= 95.0 and k >= 5:
+                print(f"    ... (95% of ceiling captured at K={k+1})")
+                break
 
         print("=" * 70)
 

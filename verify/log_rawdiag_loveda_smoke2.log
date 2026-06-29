@@ -1,0 +1,94 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+========================================================================
+Phase-1A Release-band Raw Multi-Head Collection
+Config        : configs/cfg_loveda.py
+Dataset tag   : loveda
+Classes (7)  : ['background', 'building', 'road', 'water', 'barren', 'forest', 'agricultural']
+Targets       : ['water', 'building', 'road', 'forest', 'agricultural']
+global_thd τ  : 0.5   λτ = 0.1000   bg_idx=0
+Release-band  : raw_top1_post=c ∧ λτ ≤ fused_after_presence < τ
+per-image cap : 2000   global cap : 100,000
+Out dir       : verify/rawdiag_loveda_smoke
+Limit         : 2 images
+========================================================================
+
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a57700000d9d0'
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a5a4c0000d9cf'
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a5a4d0000d9cd'
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs00000000028a58e30000d9ce'
+
+Total images: 2
+
+========================================================================
+SMOKE-TEST DIAGNOSTICS
+  class              band_px      kept        seen inst_raw_mu inst_orig_mu differ?
+  water              114,331     3,425       3,425      0.7138       0.0035     yes
+    -> verify/rawdiag_loveda_smoke/rawdiag_loveda_releaseband_water.npz  (0.1 MB, 3,425 rows)
+  building            19,235     4,000       4,000      0.3740       0.0318     yes
+    -> verify/rawdiag_loveda_smoke/rawdiag_loveda_releaseband_building.npz  (0.1 MB, 4,000 rows)
+  road                89,685     4,000       4,000      0.4631       0.0319     yes
+    -> verify/rawdiag_loveda_smoke/rawdiag_loveda_releaseband_road.npz  (0.1 MB, 4,000 rows)
+  forest                 494       494         494      0.4107       0.0000     yes
+    -> verify/rawdiag_loveda_smoke/rawdiag_loveda_releaseband_forest.npz  (0.0 MB, 494 rows)
+  agricultural       284,248     2,000       2,000      0.2734       0.0284     yes
+    -> verify/rawdiag_loveda_smoke/rawdiag_loveda_releaseband_agricultural.npz  (0.1 MB, 2,000 rows)
+
+========================================================================
+Smoke-test checks:
+  1. band_px per class should track cafr_diagnose.py's n_band trend.
+  2. inst_raw_mu vs inst_orig_mu must DIFFER (presence^2 split working).
+  3. .npz sizes controllable (raise caps for full val once confirmed).
+========================================================================

@@ -1,0 +1,230 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+
+========================================================================
+CAFR Diagnostic v1
+Config       : configs/cfg_openearthmap.py
+Classes ( 9) : ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+global_thd   : 0.1   bg_idx=0
+λ-rule λ     : 0.2   (τ_c = 0.20·0.1 = 0.0200)
+elig_mode    : score_safety
+eligibility  : p50 AND supp_mass≥0.03
+limit        : all images
+========================================================================
+
+  processed 50 images ...
+  processed 100 images ...
+  processed 150 images ...
+  processed 200 images ...
+  processed 250 images ...
+  processed 300 images ...
+  processed 350 images ...
+Total images : 384   valid pixels : 375,640,226
+
+========================================================================
+STAGE 0 — Background Gate Policy  (diagnostic suggestion only)
+========================================================================
+  -- load statistics (descriptive only) --
+  r_gate          : 3.92%  (raw_top1≠bg but score<0.1, gated to bg)
+  r_argbg         : 0.61%  (raw_top1=background directly)
+  gate-bg mean sc : 0.0673   argmax-bg mean sc : 0.2618
+  gate entropy(n) : 0.844  (0=one class dominates gated pixels, 1=uniform → risky to release)
+
+  -- decisive probe: effect of turning the gate OFF (naive-q0) --
+  baseline mIoU   : 44.20%
+  gate-off  mIoU  : 45.27%   Δ=+1.07%
+
+  → Policy suggestion: [semantic-bg dominant (suggestion)]
+    Turning the gate off IMPROVES mIoU → the global gate is over-suppressing reliable foreground. Consider weakening or disabling it, while still applying class-selective recovery.
+    (high gate entropy 0.84 would further argue for keeping the gate.)
+
+========================================================================
+STAGE 1 — Class Eligibility Selector
+========================================================================
+  elig_mode    : score_safety  (Stage 0 policy: semantic-bg dominant (suggestion))
+  score_safety = 1 - P(score < τ/2 | suppressed)  [v1 proxy]
+  rel_band = P(λτ ≤ score < τ | class)   high_anchor = P(score ≥ τ | class)  [v2 release-band; λτ=0.0200, τ=0.1]
+  deep_noise = P(score < λτ | class)  (λ-rule never releases this mass)
+  gmm_tau = GMM crossing on suppressed scores (risk signal in uncertainty-bg mode)
+  band_* columns computed on RELEASE BAND only: raw_top1=c ∧ λτ ≤ score < τ
+  band_mg  = mean(top1-top2) in band    band_mg25 = q25 of same
+  band_bg  = mean(top1-bg)   in band    band_bg25 = q25 of same
+  t2_bg    = P(top2_class = background | band)  (runner-up is bg → release risky)
+  t2_entr  = entropy of top2_class distribution in band
+             (high entropy → class confused with many others → risky)
+  n_band guard: classes with <100 band pixels show 'nan' for band_* / t2_*
+  spatial columns (radius=5px, band pixels only):
+    anc_tch  = P(band pixel within 5px of own-class anchor)
+    isl_rt   = P(band pixel in CC not touching own-class anchor)
+    cmp_tch  = P(band pixel within 5px of ANY other-fg anchor)
+    t2c_tch  = P(band pixel within 5px of runner-up class anchor)
+    anc_coh  = anc_tch x (1-isl_rt)  [spatial hard-filter signal, semantic-bg mode]
+    sp_sc    = anc_tch x (1-isl_rt) x (1-cmp_tch)  [diagnostic only; cmp_tch saturates on OEM]
+  class                n_win     n_band rel_bnd hi_anch  gmm_tau  band_mg band_mg25  band_bg band_bg25   t2_bg t2_entr    elig anc_tch isl_rt cmp_tch t2c_tch anc_coh  sp_sc
+  bareland        19,591,429  2,253,358  0.1150  0.8847   0.0797   0.0204    0.0068   0.0667    0.0538  0.0006  0.7733  0.1034  0.2576 0.5420  0.6929  0.3292  0.1180 0.0362
+  grass           73,624,051  1,746,379  0.0237  0.9714   0.0250   0.0185    0.0067   0.0649    0.0524  0.0098  0.7829  0.0207  0.6520 0.1182  0.6984  0.2902  0.5749 0.1734
+  pavement        38,064,781  3,634,153  0.0955  0.8999   0.0590   0.0151    0.0054   0.0687    0.0572  0.0005  0.5026  0.0866  0.6717 0.0825  0.6685  0.2655  0.6163 0.2043
+  road            31,884,381  2,213,427  0.0694  0.9249   0.0058   0.0115    0.0033   0.0658    0.0529  0.0009  0.5148  0.0614  0.4146 0.2745  0.7919  0.3944  0.3008 0.0626
+  tree            74,604,419    951,569  0.0128  0.9863   0.0788   0.0182    0.0065   0.0661    0.0555  0.0233  0.7233  0.0117  0.6427 0.0943  0.6257  0.2511  0.5821 0.2179
+  water            7,776,072     81,619  0.0105  0.9794   0.0233   0.0198    0.0069   0.0700    0.0594  0.0387  0.8911  0.0094  0.6269 0.2056  0.5665  0.2740  0.4981 0.2159
+  cropland        43,699,770    358,531  0.0082  0.9897   0.0240   0.0171    0.0065   0.0599    0.0462  0.0990  0.8460  0.0069  0.3629 0.3204  0.7196  0.3973  0.2467 0.0692
+  building        84,103,855  2,019,052  0.0240  0.9700   0.0191   0.0215    0.0078   0.0652    0.0515  0.0037  0.7058  0.0208  0.7917 0.0620  0.5523  0.2616  0.7426 0.3325
+
+  Selection rule: eligibility ≥ p50=0.0207  AND  suppressed_mass ≥ 0.03
+  Eligible classes: ['bareland', 'pavement', 'road', 'building']
+
+  [Spatial hard filter]  anchor_coherence ≥ 0.5  (semantic-bg mode, radius=5px)
+    Removed by spatial filter: ['bareland', 'road']
+  Eligible after spatial filter: ['pavement', 'building']
+
+
+========================================================================
+ORACLE BENEFIT ANALYSIS  (diagnostic, uses GT labels — Phase-0 gold standard)
+========================================================================
+  Single-class λ-release: set τ_c = λτ=0.0200 for one class at a
+  time, keep all others at τ=0.1. Measures true per-class benefit.
+  GT breakdown computed on pixels newly released (raw_top1=c, λτ≤score<τ).
+  label: beneficial(↑mIoU,↑cls,no worst_drop) / harmful(↓mIoU or big drop) / ambiguous
+  class              n_rel   rel%  GT=c% GT=bg% GT=oth%   ΔmIoU    Δcls     Δbg  wst_fg  label
+  --------------------------------------------------------------------------------------------
+  bareland       2,253,358   11.5    5.8    0.1    94.1    0.20   -0.78    2.56    0.00  harmful
+  grass          1,746,379    2.4   44.0    3.6    52.4    0.20    0.33    1.45    0.00  beneficial
+  pavement       3,634,153    9.5   71.5    0.7    27.8    0.78    2.70    4.35    0.00  beneficial
+  road           2,213,427    6.9    4.6    0.8    94.6    0.03   -2.15    2.39    0.00  harmful
+  tree             951,569    1.3   26.4    2.9    70.7    0.06   -0.22    0.80    0.00  harmful
+  water             81,619    1.0   26.6    4.9    68.5   -0.01   -0.18    0.05    0.00  harmful
+  cropland         358,531    0.8    6.1   21.1    72.8   -0.04   -0.21   -0.16    0.00  harmful
+  building       2,019,052    2.4   13.0    1.4    85.6    0.09   -1.23    2.05    0.00  harmful
+
+  Oracle label summary:
+    beneficial  : ['grass', 'pavement']
+    harmful     : ['bareland', 'road', 'tree', 'water', 'cropland', 'building']
+
+  Stage 1 selector vs Oracle agreement:
+    selected & beneficial (TP) : ['pavement']
+    selected & harmful    (FP) : ['building']
+    missed   & beneficial (FN) : ['grass']
+
+========================================================================
+STAGE 2 — Threshold Estimators (eligible classes only)
+========================================================================
+  Otsu/GMM estimated on SUPPRESSED scores only (score<global_thd) and clamped ≤ 0.1.
+  Rationale: recovery must LOWER the gate; estimating on the full winner distribution
+  would yield τ>global_thd (raising the gate — the quantile failure mode).
+  class           hand-tuned    λ-rule      Otsu       GMM    n_supp  gmm_mu_lo  gmm_mu_hi  conv
+  pavement            0.1000    0.0200    0.0605    0.0590 3,809,608     0.0493     0.0816     Y
+  building            0.1000    0.0200    0.0449    0.0191 2,526,344     0.0074     0.0715     Y
+
+  Non-eligible (kept at global_thd=0.1):
+    bareland      : hand-tuned=0.1000 (=global)
+    grass         : hand-tuned=0.1000 (=global)
+    road          : hand-tuned=0.1000 (=global)
+    tree          : hand-tuned=0.1000 (=global)
+    water         : hand-tuned=0.1000 (=global)
+    cropland      : hand-tuned=0.1000 (=global)
+
+========================================================================
+EVALUATION — mIoU comparison
+========================================================================
+  Baseline mIoU  : 44.20%  fg-mIoU=47.58%
+
+  Naive quantile (q=0.00, all-class gate off):
+  [naive-q0]  mIoU=45.27%  fg-mIoU=47.18%  Δ=+1.07%
+          worst-fg-drop=-2.34%
+
+  Eligibility + λ-rule:
+  [Eligibility + λ-rule]  mIoU=45.23%  fg-mIoU=47.77%  Δ=+1.03%
+          worst-fg-drop=-1.23%
+
+  Eligibility + Otsu  :
+  [Eligibility + Otsu]  mIoU=45.04%  fg-mIoU=47.72%  Δ=+0.84%
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+OSError: [Errno 16] Device or resource busy: '.nfs0000000002887c480000d927'
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+Traceback (most recent call last):
+OSError: [Errno 16] Device or resource busy: '.nfs000000000288677d0000d926'
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs0000000002887cc30000d925'
+Traceback (most recent call last):
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 300, in _run_finalizers
+    finalizer()
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 224, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/multiprocessing/util.py", line 133, in _remove_temp_dir
+    rmtree(tempdir)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 734, in rmtree
+    _rmtree_safe_fd(fd, path, onerror)
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 690, in _rmtree_safe_fd
+    onerror(os.unlink, fullname, sys.exc_info())
+  File "/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/shutil.py", line 688, in _rmtree_safe_fd
+    os.unlink(entry.name, dir_fd=topfd)
+OSError: [Errno 16] Device or resource busy: '.nfs000000000288677b0000d925'
+          worst-fg-drop=-1.11%
+
+  Eligibility + GMM   :
+  [Eligibility + GMM]  mIoU=45.05%  fg-mIoU=47.71%  Δ=+0.85%
+          worst-fg-drop=-1.23%
+
+  Hand-tuned reference:
+  [Hand-tuned reference]  mIoU=44.20%  fg-mIoU=47.58%  Δ=+0.00%
+          worst-fg-drop=+0.00%
+
+========================================================================
+SUMMARY — Per-class IoU across all methods
+========================================================================
+  class             baseline    naive-q0      λ-rule        Otsu         GMM  hand-tuned
+  --------------------------------------------------------------------------------------
+  background           17.14       29.99       24.92       23.58       23.76       17.14
+  bareland             14.06       13.27       14.06       14.06       14.06       14.06
+  grass                42.94       43.13       42.94       42.94       42.94       42.94
+  pavement             27.86       30.50       30.56       30.06       30.11       27.86
+  road                 45.89       43.55       45.89       45.89       45.89       45.89
+  tree                 63.91       63.64       63.91       63.91       63.91       63.91
+  water                66.56       65.86       66.56       66.56       66.56       66.56
+  cropland             44.14       43.86       44.14       44.14       44.14       44.14
+  building             75.30       73.64       74.07       74.19       74.07       75.30
+  --------------------------------------------------------------------------------------
+  mIoU                 44.20       45.27       45.23       45.04       45.05       44.20
+  fg-mIoU              47.58       47.18       47.77       47.72       47.71       47.58
+
+  Eligible classes: ['pavement', 'building']
+  λ=0.2, τ_global=0.1, λ·τ_global=0.0200
+
+  Consistency check (does λ ≈ Otsu ≈ hand-tuned?):
+    pavement        λ=0.0200  Otsu=0.0605  GMM=0.0590  hand-tuned=  (=global)
+    building        λ=0.0200  Otsu=0.0449  GMM=0.0191  hand-tuned=  (=global)

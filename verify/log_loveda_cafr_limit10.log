@@ -1,0 +1,158 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+
+========================================================================
+CAFR Diagnostic v1
+Config       : configs/cfg_loveda.py
+Classes ( 7) : ['background', 'building', 'road', 'water', 'barren', 'forest', 'agricultural']
+global_thd   : 0.5   bg_idx=0
+λ-rule λ     : 0.2   (τ_c = 0.20·0.5 = 0.1000)
+elig_mode    : release_band
+eligibility  : candidate-topk=3 ambiguous-gap=0.05 supp_mass≥0.05
+limit        : 10 images
+========================================================================
+
+Total images : 10   valid pixels : 10,485,760
+
+========================================================================
+STAGE 0 — Background Gate Policy  (diagnostic suggestion only)
+========================================================================
+  -- load statistics (descriptive only) --
+  r_gate          : 81.97%  (raw_top1≠bg but score<0.5, gated to bg)
+  r_argbg         : 0.06%  (raw_top1=background directly)
+  gate-bg mean sc : 0.1808   argmax-bg mean sc : 0.0525
+  gate entropy(n) : 0.569  (0=one class dominates gated pixels, 1=uniform → risky to release)
+
+  -- decisive probe: effect of turning the gate OFF (naive-q0) --
+  baseline mIoU   : 36.48%
+  gate-off  mIoU  : 19.85%   Δ=-16.64%
+
+  → Policy suggestion: [uncertainty-bg dominant (suggestion)]
+    Turning the gate off COLLAPSES mIoU → the global gate is a necessary uncertainty fallback. KEEP the gate; only relax a few eligible foreground classes.
+    (high gate entropy 0.57 would further argue for keeping the gate.)
+
+========================================================================
+STAGE 1 — Class Eligibility Selector
+========================================================================
+  elig_mode    : release_band  (Stage 0 policy: uncertainty-bg dominant (suggestion))
+  [GMM risk penalty ACTIVE: elig = base × (1 - gmm_risk) where gmm_risk = clip((gmm_tau - λτ) / (τ - λτ), 0, 1)]
+  score_safety = 1 - P(score < τ/2 | suppressed)  [v1 proxy]
+  rel_band = P(λτ ≤ score < τ | class)   high_anchor = P(score ≥ τ | class)  [v2 release-band; λτ=0.1000, τ=0.5]
+  deep_noise = P(score < λτ | class)  (λ-rule never releases this mass)
+  gmm_tau = GMM crossing on suppressed scores (risk signal in uncertainty-bg mode)
+  band_* columns computed on RELEASE BAND only: raw_top1=c ∧ λτ ≤ score < τ
+  band_mg  = mean(top1-top2) in band    band_mg25 = q25 of same
+  band_bg  = mean(top1-bg)   in band    band_bg25 = q25 of same
+  t2_bg    = P(top2_class = background | band)  (runner-up is bg → release risky)
+  t2_entr  = entropy of top2_class distribution in band
+             (high entropy → class confused with many others → risky)
+  n_band guard: classes with <100 band pixels show 'nan' for band_* / t2_*
+  spatial columns (radius=5px, band pixels only):
+    anc_tch  = P(band pixel within 5px of own-class anchor)
+    isl_rt   = P(band pixel in CC not touching own-class anchor)
+    cmp_tch  = P(band pixel within 5px of ANY other-fg anchor)
+    t2c_tch  = P(band pixel within 5px of runner-up class anchor)
+    anc_coh  = anc_tch x (1-isl_rt)  [spatial hard-filter signal, semantic-bg mode]
+    sp_sc    = anc_tch x (1-isl_rt) x (1-cmp_tch)  [diagnostic only; cmp_tch saturates on OEM]
+  class                n_win     n_band rel_bnd hi_anch  gmm_tau  band_mg band_mg25  band_bg band_bg25   t2_bg t2_entr    elig anc_tch isl_rt cmp_tch t2c_tch anc_coh  sp_sc
+  building         1,281,153    120,938  0.0944  0.0918   0.0891   0.1232    0.0916   0.2639    0.2555  0.0000  0.2408  0.0087  0.0988 0.8689  0.0013  0.0007  0.0129 0.0129
+  road               445,814    303,116  0.6799  0.2218   0.3286   0.0988    0.0548   0.1670    0.1091  0.0000  0.3601  0.0646  0.0453 0.9513  0.0032  0.0008  0.0022 0.0022
+  water            1,202,808    211,397  0.1758  0.8132   0.3252   0.2477    0.2112   0.3319    0.3021  0.0283  0.3956  0.0624  0.2054 0.6112  0.0015  0.0001  0.0798 0.0797
+  barren           1,451,309    680,438  0.4688  0.0496   0.1543   0.0706    0.0463   0.1148    0.0492  0.6801  0.4591  0.0201  0.0180 0.9717  0.0101  0.0057  0.0005 0.0005
+  forest              45,973     43,661  0.9497  0.0000   0.2734   0.0297    0.0139   0.3329    0.3289  0.0000  0.0664  0.0000  0.0000 1.0000  0.0252  0.0000  0.0000 0.0000
+  agricultural     6,052,011  3,317,138  0.5481  0.1021   0.2676   0.1664    0.1021   0.2449    0.1242  0.0012  0.4160  0.0325  0.0300 0.7091  0.0164  0.0036  0.0087 0.0086
+
+  Selection rule: candidate-topk=3  ambiguous-gap=0.05  supp_mass≥0.05
+  Eligible classes: ['road', 'water', 'barren', 'agricultural']
+
+
+========================================================================
+ORACLE BENEFIT ANALYSIS  (diagnostic, uses GT labels — Phase-0 gold standard)
+========================================================================
+  Single-class λ-release: set τ_c = λτ=0.1000 for one class at a
+  time, keep all others at τ=0.5. Measures true per-class benefit.
+  GT breakdown computed on pixels newly released (raw_top1=c, λτ≤score<τ).
+  label: beneficial(↑mIoU,↑cls,no worst_drop) / harmful(↓mIoU or big drop) / ambiguous
+  class              n_rel   rel%  GT=c% GT=bg% GT=oth%   ΔmIoU    Δcls     Δbg  wst_fg  label
+  --------------------------------------------------------------------------------------------
+  building         120,938    9.4   57.9   41.6     0.5    2.48   17.42   -0.08    0.00  beneficial
+  road             303,116   68.0    3.8   89.5     6.7   -4.56  -29.12   -2.82    0.00  harmful
+  water            211,397   17.6   63.8   35.5     0.7    0.87    5.99    0.09    0.00  beneficial
+  barren           680,438   46.9    1.7   69.2    29.1   -1.14   -4.02   -3.93    0.00  harmful
+  forest            43,661   95.0   54.9   44.5     0.6    0.52    3.69   -0.05    0.00  beneficial
+  agricultural   3,317,138   54.8   22.0   67.3    10.7   -1.94    6.47  -20.02    0.00  harmful
+
+  Oracle label summary:
+    beneficial  : ['building', 'water', 'forest']
+    harmful     : ['road', 'barren', 'agricultural']
+
+  Stage 1 selector vs Oracle agreement:
+    selected & beneficial (TP) : ['water']
+    selected & harmful    (FP) : ['agricultural', 'barren', 'road']
+    missed   & beneficial (FN) : ['building', 'forest']
+
+========================================================================
+STAGE 2 — Threshold Estimators (eligible classes only)
+========================================================================
+  Otsu/GMM estimated on SUPPRESSED scores only (score<global_thd) and clamped ≤ 0.5.
+  Rationale: recovery must LOWER the gate; estimating on the full winner distribution
+  would yield τ>global_thd (raising the gate — the quantile failure mode).
+  class           hand-tuned    λ-rule      Otsu       GMM    n_supp  gmm_mu_lo  gmm_mu_hi  conv
+  road                0.5000    0.1000    0.2715    0.3286   346,932     0.1561     0.3985     Y
+  water               0.5000    0.1000    0.2910    0.3252   224,742     0.1815     0.4209     Y
+  barren              0.5000    0.1000    0.2012    0.1543 1,379,384     0.0972     0.2976     Y
+  agricultural        0.5000    0.1000    0.2559    0.2676 5,434,335     0.1096     0.4094     Y
+
+  Non-eligible (kept at global_thd=0.5):
+    building      : hand-tuned=0.5000 (=global)
+    forest        : hand-tuned=0.5000 (=global)
+
+========================================================================
+EVALUATION — mIoU comparison
+========================================================================
+  Baseline mIoU  : 36.48%  fg-mIoU=32.44%
+
+  Naive quantile (q=0.00, all-class gate off):
+  [naive-q0]  mIoU=19.85%  fg-mIoU=23.15%  Δ=-16.64%
+          worst-fg-drop=-33.21%
+
+  Eligibility + λ-rule:
+  [Eligibility + λ-rule]  mIoU=29.40%  fg-mIoU=29.00%  Δ=-7.08%
+          worst-fg-drop=-29.12%
+
+  Eligibility + Otsu  :
+  [Eligibility + Otsu]  mIoU=37.45%  fg-mIoU=34.46%  Δ=+0.97%
+          worst-fg-drop=-8.91%
+
+  Eligibility + GMM   :
+  [Eligibility + GMM]  mIoU=37.48%  fg-mIoU=34.49%  Δ=+0.99%
+          worst-fg-drop=-8.93%
+
+  Hand-tuned reference:
+  [Hand-tuned reference]  mIoU=36.48%  fg-mIoU=32.44%  Δ=+0.00%
+          worst-fg-drop=+0.00%
+
+========================================================================
+SUMMARY — Per-class IoU across all methods
+========================================================================
+  class             baseline    naive-q0      λ-rule        Otsu         GMM  hand-tuned
+  --------------------------------------------------------------------------------------
+  background           60.73        0.04       31.85       55.41       55.40       60.73
+  building             46.19       12.98       46.19       46.19       46.19       46.19
+  road                 47.64       17.33       18.52       38.73       38.71       47.64
+  water                79.79       85.41       85.78       86.39       86.36       79.79
+  barren                6.40        1.27        2.38        6.53        6.80        6.40
+  forest                0.00        3.68        0.00        0.00        0.00        0.00
+  agricultural         14.64       18.21       21.11       28.92       28.89       14.64
+  --------------------------------------------------------------------------------------
+  mIoU                 36.48       19.85       29.40       37.45       37.48       36.48
+  fg-mIoU              32.44       23.15       29.00       34.46       34.49       32.44
+
+  Eligible classes: ['road', 'water', 'barren', 'agricultural']
+  λ=0.2, τ_global=0.5, λ·τ_global=0.1000
+
+  Consistency check (does λ ≈ Otsu ≈ hand-tuned?):
+    road            λ=0.1000  Otsu=0.2715  GMM=0.3286  hand-tuned=  (=global)
+    water           λ=0.1000  Otsu=0.2910  GMM=0.3252  hand-tuned=  (=global)
+    barren          λ=0.1000  Otsu=0.2012  GMM=0.1543  hand-tuned=  (=global)
+    agricultural    λ=0.1000  Otsu=0.2559  GMM=0.2676  hand-tuned=  (=global)

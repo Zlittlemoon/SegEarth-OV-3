@@ -1,0 +1,136 @@
+====================================================================================================
+Phase-1A Separability Analysis   dir=verify/rawdiag_loveda
+  AUC: probability a signal ranks an is_c pixel above the comparison class.
+  0.5 = no separation; >0.5 raw signal predicts is_c; <0.5 inverse (still informative).
+  BASELINE row = fused_after (the failed v2 post-fusion signal). Raw signals must beat it.
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+CLASS: agricultural   n=2,000,000   is_c=39.0%  is_bg=41.6%  is_other=19.4%   λτ=0.1000
+  (NOTE: is_c/is_bg/is_other here are cap-reweighted marginals, not true release-band priors — use Phase-0 oracle GT=c% for priors.)
+  signal        AUC c|bg  (img-bal)  AUC c|oth  (img-bal)     mean|c mean|bg  note
+  semantic         0.363      0.500      0.463      0.501      0.464   0.584  
+  inst_raw         0.383      0.502      0.491      0.503      0.327   0.383  
+  inst_orig        0.645      0.500      0.531      0.501      0.123   0.077  
+  fused_raw        0.364      0.500      0.466      0.501      0.477   0.593  
+  fused_after      0.539      0.500      0.485      0.501      0.333   0.316  BASELINE(v2)
+  bg_post          0.404      0.502      0.500      0.500      0.015   0.018  
+  gap_post         0.546      0.500      0.485      0.501      0.318   0.297  
+  presence         0.703      0.500      0.567      0.500      0.790   0.630  class-level
+  → Δ(img-bal AUC c|bg) vs baseline fused_after=0.500:
+     bg_post:+0.002  inst_raw:+0.002  inst_orig:+0.000  semantic:+0.000  gap_post:-0.000  fused_raw:-0.000
+
+----------------------------------------------------------------------------------------------------
+CLASS: building   n=1,929,017   is_c=35.3%  is_bg=53.0%  is_other=11.7%   λτ=0.1000
+  (NOTE: is_c/is_bg/is_other here are cap-reweighted marginals, not true release-band priors — use Phase-0 oracle GT=c% for priors.)
+  signal        AUC c|bg  (img-bal)  AUC c|oth  (img-bal)     mean|c mean|bg  note
+  semantic         0.475      0.515      0.369      0.517      0.349   0.395  
+  inst_raw         0.447      0.507      0.325      0.508      0.321   0.356  
+  inst_orig        0.494      0.489      0.620      0.480      0.100   0.117  
+  fused_raw        0.454      0.510      0.317      0.510      0.416   0.467  
+  fused_after      0.513      0.503      0.497      0.497      0.302   0.297  BASELINE(v2)
+  bg_post          0.417      0.491      0.442      0.485      0.011   0.014  
+  gap_post         0.520      0.504      0.507      0.499      0.291   0.283  
+  presence         0.532      0.499      0.692      0.495      0.873   0.815  class-level
+  → Δ(img-bal AUC c|bg) vs baseline fused_after=0.503:
+     semantic:+0.012  fused_raw:+0.007  inst_raw:+0.004  gap_post:+0.000  bg_post:-0.012  inst_orig:-0.014
+
+----------------------------------------------------------------------------------------------------
+CLASS: forest   n=1,801,668   is_c=20.7%  is_bg=53.3%  is_other=26.0%   λτ=0.1000
+  (NOTE: is_c/is_bg/is_other here are cap-reweighted marginals, not true release-band priors — use Phase-0 oracle GT=c% for priors.)
+  signal        AUC c|bg  (img-bal)  AUC c|oth  (img-bal)     mean|c mean|bg  note
+  semantic         0.535      0.511      0.547      0.510      0.610   0.575  
+  inst_raw         0.531      0.485      0.511      0.494      0.297   0.288  
+  inst_orig        0.488      0.499      0.460      0.496      0.020   0.013  
+  fused_raw        0.535      0.509      0.546      0.507      0.616   0.582  
+  fused_after      0.550      0.507      0.520      0.506      0.335   0.315  BASELINE(v2)
+  bg_post          0.511      0.498      0.558      0.496      0.015   0.015  
+  gap_post         0.549      0.507      0.516      0.506      0.321   0.300  
+  presence         0.465      0.497      0.443      0.497      0.634   0.660  class-level
+  → Δ(img-bal AUC c|bg) vs baseline fused_after=0.507:
+     semantic:+0.004  fused_raw:+0.002  gap_post:+0.000  inst_orig:-0.008  bg_post:-0.009  inst_raw:-0.022
+
+----------------------------------------------------------------------------------------------------
+CLASS: road   n=2,000,000   is_c=27.4%  is_bg=57.8%  is_other=14.8%   λτ=0.1000
+  (NOTE: is_c/is_bg/is_other here are cap-reweighted marginals, not true release-band priors — use Phase-0 oracle GT=c% for priors.)
+  signal        AUC c|bg  (img-bal)  AUC c|oth  (img-bal)     mean|c mean|bg  note
+  semantic         0.401      0.507      0.408      0.503      0.278   0.380  
+  inst_raw         0.448      0.505      0.427      0.515      0.304   0.324  
+  inst_orig        0.598      0.509      0.552      0.507      0.180   0.138  
+  fused_raw        0.410      0.503      0.403      0.504      0.371   0.449  
+  fused_after      0.471      0.504      0.450      0.503      0.274   0.287  BASELINE(v2)
+  bg_post          0.397      0.487      0.440      0.488      0.012   0.016  
+  gap_post         0.480      0.504      0.455      0.504      0.262   0.271  
+  presence         0.596      0.500      0.588      0.500      0.891   0.806  class-level
+  → Δ(img-bal AUC c|bg) vs baseline fused_after=0.504:
+     inst_orig:+0.005  semantic:+0.003  inst_raw:+0.001  gap_post:-0.000  fused_raw:-0.000  bg_post:-0.017
+
+----------------------------------------------------------------------------------------------------
+CLASS: water   n=1,695,529   is_c=49.7%  is_bg=40.6%  is_other=9.7%   λτ=0.1000
+  (NOTE: is_c/is_bg/is_other here are cap-reweighted marginals, not true release-band priors — use Phase-0 oracle GT=c% for priors.)
+  signal        AUC c|bg  (img-bal)  AUC c|oth  (img-bal)     mean|c mean|bg  note
+  semantic         0.392      0.509      0.517      0.508      0.413   0.545  
+  inst_raw         0.433      0.511      0.526      0.495      0.406   0.449  
+  inst_orig        0.597      0.515      0.483      0.501      0.195   0.145  
+  fused_raw        0.389      0.505      0.503      0.499      0.493   0.606  
+  fused_after      0.527      0.507      0.537      0.503      0.307   0.296  BASELINE(v2)
+  bg_post          0.413      0.495      0.518      0.496      0.024   0.026  
+  gap_post         0.532      0.507      0.526      0.502      0.283   0.270  
+  presence         0.646      0.500      0.466      0.500      0.782   0.643  class-level
+  → Δ(img-bal AUC c|bg) vs baseline fused_after=0.507:
+     inst_orig:+0.008  inst_raw:+0.004  semantic:+0.002  gap_post:+0.000  fused_raw:-0.002  bg_post:-0.012
+
+====================================================================================================
+CLASS-LEVEL Spearman  (signal mean over is_c pixels  vs  class is_c rate)
+  small-n trend only (~5 classes). For the real target use Phase-0 oracle GT=c%.
+  signal        spearman
+  semantic        -0.100
+  inst_raw         1.000
+  inst_orig        0.700
+  fused_raw        0.000
+  fused_after     -0.100
+  bg_post          0.600
+  gap_post        -0.300
+  presence         0.000
+  classes: ['agricultural', 'building', 'forest', 'road', 'water']
+  is_c rate: [0.39, 0.353, 0.207, 0.274, 0.497]
+
+====================================================================================================
+SEMANTIC-INSTANCE CONSISTENCY  (four-cell, is_c vs is_bg)
+  hh=P(sem hi ∧ inst hi)  hl=P(sem hi ∧ inst lo)  lh=P(sem lo ∧ inst hi)  ll=P(both lo)
+  Hypothesis: true fg (is_c) shows higher agreement (hh) than gated bg (is_bg).
+
+  --- absolute (≥λτ) ---
+  class          grp      hh      hl      lh      ll
+  agricultural  is_c   0.985   0.001   0.014   0.000
+  agricultural is_bg   0.988   0.001   0.011   0.000
+  building      is_c   0.867   0.072   0.061   0.000
+  building     is_bg   0.852   0.060   0.088   0.000
+  forest        is_c   0.886   0.108   0.006   0.000
+  forest       is_bg   0.828   0.167   0.005   0.000
+  road          is_c   0.702   0.000   0.298   0.000
+  road         is_bg   0.795   0.000   0.205   0.000
+  water         is_c   0.807   0.001   0.191   0.000
+  water        is_bg   0.870   0.002   0.129   0.000
+
+  --- relative (≥class-q75) ---
+  class          grp      hh      hl      lh      ll
+  agricultural  is_c   0.125   0.029   0.053   0.793
+  agricultural is_bg   0.312   0.060   0.040   0.589
+  building      is_c   0.073   0.108   0.104   0.716
+  building     is_bg   0.148   0.105   0.107   0.640
+  forest        is_c   0.167   0.098   0.089   0.647
+  forest       is_bg   0.173   0.084   0.073   0.669
+  road          is_c   0.084   0.063   0.121   0.731
+  road         is_bg   0.156   0.135   0.108   0.601
+  water         is_c   0.157   0.029   0.064   0.749
+  water        is_bg   0.242   0.104   0.065   0.590
+
+====================================================================================================
+Read-out guide:
+  * A raw signal whose img-bal AUC c|bg is clearly >0.5 AND > baseline fused_after
+    means raw scores carry release-precision info that v2 fusion lost.
+  * Compare c|bg (LoveDA failure mode) and c|oth (OEM failure mode) separately.
+  * If NO raw signal beats baseline on either, internal scores are insufficient
+    -> external prior (RemoteCLIP / VLM / light calibration).
+====================================================================================================

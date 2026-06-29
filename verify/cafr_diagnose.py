@@ -823,6 +823,121 @@ def main():
         print(f"  Eligible after spatial filter: {after_sp}\n")
 
     # =========================================================================
+    # ORACLE BENEFIT ANALYSIS  (diagnostic only — uses GT labels)
+    # Phase-0 gold standard: establishes a beneficial/harmful/ambiguous label
+    # per foreground class via single-class λ-release experiments on the already
+    # cached arrays.  Does NOT enter the method; used to (1) validate the Stage 1
+    # selector against ground truth, and (2) provide the supervised target for the
+    # later raw multi-head signal separability test (Phase 1).
+    #
+    # For each foreground class c:
+    #   single-class release: lower ONLY τ_c to λ·τ_global, keep all others at τ.
+    #   Measure: ΔmIoU, Δtarget_IoU, Δbackground_IoU, worst_fg_drop.
+    #   GT breakdown of newly released (band) pixels: GT=c% / GT=bg% / GT=other%.
+    #
+    # Labels (three-way, keeps a grey zone instead of a hard binary split):
+    #   beneficial — ΔmIoU>0 AND Δtarget_IoU>0 AND worst_fg_drop ≥ -1%
+    #   harmful    — ΔmIoU<0 OR  Δtarget_IoU<0 OR  worst_fg_drop < -2%
+    #   ambiguous  — everything else (small gain, or gain with notable side-effects)
+    # =========================================================================
+    print(f"\n{'='*72}")
+    print("ORACLE BENEFIT ANALYSIS  (diagnostic, uses GT labels — Phase-0 gold standard)")
+    print(f"{'='*72}")
+    print(f"  Single-class λ-release: set τ_c = λτ={lambda_val:.4f} for one class at a")
+    print(f"  time, keep all others at τ={global_thd}. Measures true per-class benefit.")
+    print(f"  GT breakdown computed on pixels newly released (raw_top1=c, λτ≤score<τ).")
+    print(f"  label: beneficial(↑mIoU,↑cls,no worst_drop) / harmful(↓mIoU or big drop) / ambiguous")
+
+    oracle_hdr = (
+        f"  {'class':<14}{'n_rel':>10}{'rel%':>7}{'GT=c%':>7}{'GT=bg%':>7}{'GT=oth%':>8}"
+        f"{'ΔmIoU':>8}{'Δcls':>8}{'Δbg':>8}{'wst_fg':>8}  label"
+    )
+    print(oracle_hdr)
+    print("  " + "-" * (len(oracle_hdr) - 2))
+
+    oracle_labels = {}   # c → 'beneficial' | 'harmful' | 'ambiguous' | 'skip'
+
+    def _ov(v, w, p=2):
+        return f"{v:{w}.{p}f}" if not (isinstance(v, float) and np.isnan(v)) \
+               else f"{'nan':>{w}}"
+
+    for c in range(C):
+        if c == bg_idx:
+            continue
+        if len(winner_scores.get(c, [])) < args.min_pixels:
+            oracle_labels[c] = "skip"
+            continue
+
+        # single-class λ-release threshold vector (only class c relaxed)
+        sc_thd = base_thd.copy()
+        sc_thd[c] = lambda_val
+        sc_pred = predict_with(raw_top1, max_sc, sc_thd, bg_idx)
+        sc_iou  = iou_from_cm(cm_from_pred(gt_all, sc_pred, C))
+        sc_miou = float(np.nanmean(sc_iou)) * 100
+
+        delta_miou = sc_miou - base_miou
+        delta_cls  = float(sc_iou[c] - base_iou[c]) * 100 \
+                     if not np.isnan(base_iou[c]) else float("nan")
+        delta_bg   = float(sc_iou[bg_idx] - base_iou[bg_idx]) * 100 \
+                     if not np.isnan(base_iou[bg_idx]) else float("nan")
+        other_drops = [
+            float(sc_iou[k] - base_iou[k]) * 100
+            for k in range(C)
+            if k != bg_idx and k != c and not np.isnan(base_iou[k])
+        ]
+        worst_fg = min(other_drops) if other_drops else float("nan")
+
+        # GT breakdown of released pixels (raw_top1=c, λτ ≤ score < τ)
+        rel_mask = (raw_top1 == c) & (max_sc >= lambda_val) & (max_sc < global_thd)
+        n_rel = int(rel_mask.sum())
+        n_all_c = int((raw_top1 == c).sum())
+        rel_ratio = (n_rel / n_all_c * 100) if n_all_c > 0 else float("nan")
+        if n_rel > 0:
+            gt_rel = gt_all[rel_mask]
+            frac_c   = float((gt_rel == c).mean())      * 100
+            frac_bg  = float((gt_rel == bg_idx).mean()) * 100
+            frac_oth = max(0.0, 100.0 - frac_c - frac_bg)
+        else:
+            frac_c = frac_bg = frac_oth = float("nan")
+
+        # three-way label
+        if (delta_miou > 0.0 and
+                not np.isnan(delta_cls) and delta_cls > 0.0 and
+                not np.isnan(worst_fg)  and worst_fg >= -1.0):
+            label = "beneficial"
+        elif (delta_miou < 0.0 or
+              (not np.isnan(delta_cls) and delta_cls < 0.0) or
+              (not np.isnan(worst_fg)  and worst_fg < -2.0)):
+            label = "harmful"
+        else:
+            label = "ambiguous"
+        oracle_labels[c] = label
+
+        print(f"  {class_names[c]:<14}{n_rel:10,}{_ov(rel_ratio,7,1)}"
+              f"{_ov(frac_c,7,1)}{_ov(frac_bg,7,1)}{_ov(frac_oth,8,1)}"
+              f"{_ov(delta_miou,8)}{_ov(delta_cls,8)}{_ov(delta_bg,8)}{_ov(worst_fg,8)}"
+              f"  {label}")
+
+    print(f"\n  Oracle label summary:")
+    for lbl in ("beneficial", "harmful", "ambiguous"):
+        names = [class_names[c] for c, v in oracle_labels.items() if v == lbl]
+        if names:
+            print(f"    {lbl:<12}: {names}")
+
+    # Stage 1 selector vs Oracle agreement (only meaningful when selector ran)
+    sel_names  = set(class_names[c] for c in eligible_classes)
+    ben_names  = set(class_names[c] for c, v in oracle_labels.items() if v == "beneficial")
+    harm_names = set(class_names[c] for c, v in oracle_labels.items() if v == "harmful")
+    tp = sorted(sel_names & ben_names)
+    fp = sorted(sel_names & harm_names)
+    fn = sorted(ben_names - sel_names)
+    print(f"\n  Stage 1 selector vs Oracle agreement:")
+    print(f"    selected & beneficial (TP) : {tp or '—'}")
+    print(f"    selected & harmful    (FP) : {fp or '—'}")
+    print(f"    missed   & beneficial (FN) : {fn or '—'}")
+    print()
+
+    # =========================================================================
     # STAGE 2 — Threshold Estimators (eligible classes only)
     # =========================================================================
     print(f"{'='*72}")

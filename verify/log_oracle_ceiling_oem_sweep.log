@@ -1,0 +1,508 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+Config  : configs/cfg_openearthmap.py
+Classes (9): ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+prob_thd=0.1  bg_idx=0
+margin_thr sweep: [0.05, 0.1, 0.2, 0.3]
+Limit   : all images
+
+  processed 50 images ...
+  processed 100 images ...
+  processed 150 images ...
+  processed 200 images ...
+  processed 250 images ...
+  processed 300 images ...
+  processed 350 images ...
+
+Total images: 384
+
+Baseline mIoU: 44.20%
+
+======================================================================
+
+margin_thr = 0.05
+  Low-margin pixels : 50,567,063  (13.46% of valid)
+    GT==winner (correct, flip=damage): 23,991,182  (47.4%)
+    GT==runnerup (rescuable)         : 16,195,514  (32.0%)
+    GT==other  (lateral)             : 10,380,367  (20.5%)
+  Oracle mIoU : 48.57%   ceiling = +4.37 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    bareland         14.06   17.27  +3.21
+    background       17.14   17.14  +0.00
+    pavement         27.86   36.06  +8.20
+    grass            42.94   47.73  +4.78
+    cropland         44.14   51.43  +7.30
+    road             45.89   57.51  +11.62
+    tree             63.91   65.71  +1.79
+    water            66.56   67.90  +1.34
+    building         75.30   76.35  +1.04
+    mIoU             44.20   48.57  +4.37
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    road           -> pavement       7,787,128 4,214,681 739,481-3,572,447      64.9%
+    grass          -> cropland       2,060,405 2,793,773 317,802+733,368      42.4%
+    pavement       -> road           4,591,916 1,838,4531,103,054-2,753,463      71.4%
+    cropland       -> grass          2,590,753 1,462,735 443,663-1,128,018      63.9%
+    bareland       -> grass              8,418   752,992 365,868+744,574       1.1%
+    building       -> pavement         168,260   723,502 109,065+555,242      18.9%
+    tree           -> grass            710,369   721,559 214,596 +11,190      49.6%
+    bareland       -> pavement           2,756   704,057 194,833+701,301       0.4%
+    grass          -> tree             760,159   597,117 196,822-163,042      56.0%
+    bareland       -> cropland         178,133   405,864 903,060+227,731      30.5%
+    grass          -> pavement         225,734   285,801  78,771 +60,067      44.1%
+    cropland       -> bareland         632,136   257,328 762,571-374,808      71.1%
+    cropland       -> tree             127,260   197,078 224,283 +69,818      39.2%
+    cropland       -> pavement          12,318   159,247  38,761+146,929       7.2%
+    pavement       -> grass            220,101   122,493  42,934 -97,608      64.2%
+    pavement       -> building         559,290    99,352  86,455-459,938      84.9%
+    building       -> grass             38,620    97,571 130,090 +58,951      28.4%
+    tree           -> cropland         378,261    87,784 399,084-290,477      81.2%
+    bareland       -> tree              10,808    72,837 317,163 +62,029      12.9%
+    tree           -> pavement          35,395    68,505  63,862 +33,110      34.1%
+    road           -> grass              7,361    55,814  47,657 +48,453      11.7%
+    water          -> tree              17,285    46,161  15,696 +28,876      27.2%
+    bareland       -> road               9,134    41,000 620,224 +31,866      18.2%
+    grass          -> building          95,709    33,157 122,457 -62,552      74.3%
+    cropland       -> road              11,856    29,612 126,400 +17,756      28.6%
+    building       -> tree              26,015    23,708  70,640  -2,307      52.3%
+    tree           -> building          26,271    22,293  73,097  -3,978      54.1%
+    water          -> pavement           5,386    21,944  17,074 +16,558      19.7%
+    building       -> road              73,783    21,851 255,683 -51,932      77.2%
+    water          -> grass             17,690    21,515  54,422  +3,825      45.1%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    road           -> pavement      4,214,6817,787,128    1.19    70.4%  ○ feasible
+    grass          -> cropland      2,793,7732,060,405    0.64    37.8%  ★ prime target
+    pavement       -> road          1,838,4534,591,916    0.60    67.4%  ○ feasible
+    cropland       -> grass         1,462,7352,590,753    0.28    68.6%  ○ feasible
+    cropland       -> bareland       257,328 632,136    0.17    50.1%  ★ prime target
+    building       -> pavement       723,502 168,260    0.17    14.5%  ★ prime target
+    bareland       -> pavement       704,057   2,756    0.15     1.1%  ★ prime target
+    bareland       -> grass          752,992   8,418    0.14     3.6%  ★ prime target
+    tree           -> grass          721,559 710,369    0.14    47.6%  ★ prime target
+    bareland       -> cropland       405,864 178,133    0.11    52.3%  ★ prime target
+    grass          -> tree           597,117 760,159    0.10    58.1%  ★ prime target
+    grass          -> pavement       285,801 225,734    0.05    38.9%  ★ prime target
+    cropland       -> tree           197,078 127,260    0.04    45.1%  — negligible
+    water          -> tree            46,161  17,285    0.04    34.0%  — negligible
+    cropland       -> pavement       159,247  12,318    0.03     7.4%  — negligible
+    tree           -> cropland        87,784 378,261    0.02    77.2%  — negligible
+    building       -> grass           97,571  38,620    0.02    25.5%  — negligible
+    water          -> pavement        21,944   5,386    0.02    24.5%  — negligible
+    water          -> grass           21,515  17,690    0.02    53.0%  — negligible
+    pavement       -> grass          122,493 220,101    0.02    69.1%  — negligible
+    pavement       -> building        99,352 559,290    0.02    88.5%  — negligible
+    grass          -> water           13,433  22,171    0.02    54.7%  — negligible
+    bareland       -> road            41,000   9,134    0.02    29.8%  — negligible
+    bareland       -> tree            72,837  10,808    0.02    31.9%  — negligible
+    tree           -> pavement        68,505  35,395    0.01    28.4%  — negligible
+    building       -> water           11,159   4,600    0.01    22.9%  — negligible
+    road           -> grass           55,814   7,361    0.01    15.6%  — negligible
+    road           -> water            9,703   2,123    0.01    15.3%  — negligible
+    cropland       -> road            29,612  11,856    0.01    25.5%  — negligible
+    tree           -> water            7,349 160,256    0.01    94.1%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  road -> pavement                     1.19       1.19        27.2%
+       2  grass -> cropland                    0.64       1.83        41.9%
+       3  pavement -> road                     0.60       2.43        55.7%
+       4  cropland -> grass                    0.28       2.71        62.0%
+       5  cropland -> bareland                 0.17       2.88        65.9%
+       6  building -> pavement                 0.17       3.04        69.7%
+       7  bareland -> pavement                 0.15       3.20        73.2%
+       8  bareland -> grass                    0.14       3.34        76.5%
+       9  tree -> grass                        0.14       3.47        79.6%
+      10  bareland -> cropland                 0.11       3.58        82.0%
+      11  grass -> tree                        0.10       3.68        84.4%
+      12  grass -> pavement                    0.05       3.73        85.6%
+      13  cropland -> tree                     0.04       3.78        86.5%
+      14  water -> tree                        0.04       3.82        87.4%
+      15  cropland -> pavement                 0.03       3.85        88.2%
+      16  tree -> cropland                     0.02       3.87        88.7%
+      17  building -> grass                    0.02       3.89        89.2%
+      18  water -> pavement                    0.02       3.91        89.6%
+      19  water -> grass                       0.02       3.93        90.1%
+      20  pavement -> grass                    0.02       3.95        90.5%
+    ... (95% of ceiling captured at K=40)
+======================================================================
+
+margin_thr = 0.1
+  Low-margin pixels : 88,682,455  (23.61% of valid)
+    GT==winner (correct, flip=damage): 42,536,825  (48.0%)
+    GT==runnerup (rescuable)         : 27,426,600  (30.9%)
+    GT==other  (lateral)             : 18,719,030  (21.1%)
+  Oracle mIoU : 51.76%   ceiling = +7.56 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    bareland         14.06   20.90  +6.84
+    background       17.14   17.14  +0.00
+    pavement         27.86   40.85  +12.99
+    grass            42.94   51.84  +8.90
+    cropland         44.14   58.36  +14.22
+    road             45.89   63.55  +17.66
+    tree             63.91   67.24  +3.33
+    water            66.56   68.66  +2.10
+    building         75.30   77.32  +2.02
+    mIoU             44.20   51.76  +7.56
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    road           -> pavement      11,904,947 5,910,795 984,717-5,994,152      66.8%
+    grass          -> cropland       3,976,476 5,343,740 605,026+1,367,264      42.7%
+    pavement       -> road           7,488,766 2,671,5321,547,057-4,817,234      73.7%
+    cropland       -> grass          5,104,042 2,434,781 814,879-2,669,261      67.7%
+    building       -> pavement         398,587 1,478,767 209,810+1,080,180      21.2%
+    bareland       -> grass             20,686 1,365,562 662,204+1,344,876       1.5%
+    bareland       -> pavement          41,348 1,345,633 296,846+1,304,285       3.0%
+    tree           -> grass          1,567,515 1,343,740 415,906-223,775      53.8%
+    grass          -> tree           1,520,264 1,183,982 355,784-336,282      56.2%
+    bareland       -> cropland         497,180   888,2751,881,910+391,095      35.9%
+    grass          -> pavement         477,813   518,464 155,889 +40,651      48.0%
+    cropland       -> bareland       1,515,818   490,3611,565,101-1,025,457      75.6%
+    cropland       -> tree             254,660   340,021 355,162 +85,361      42.8%
+    cropland       -> pavement          27,919   311,138  66,213+283,219       8.2%
+    building       -> grass             90,824   181,611 296,037 +90,787      33.3%
+    pavement       -> grass            373,345   175,692  69,274-197,653      68.0%
+    tree           -> cropland         780,364   163,862 724,956-616,502      82.6%
+    pavement       -> building         979,498   155,025 134,498-824,473      86.3%
+    tree           -> pavement          79,894   126,860 121,825 +46,966      38.6%
+    bareland       -> tree              21,365   106,289 541,740 +84,924      16.7%
+    road           -> grass             12,880    86,026  63,213 +73,146      13.0%
+    cropland       -> road             102,091    84,275 232,823 -17,816      54.8%
+    grass          -> building         225,799    59,146 245,310-166,653      79.2%
+    bareland       -> road              23,347    55,7691,230,807 +32,422      29.5%
+    water          -> tree              32,560    50,005  33,206 +17,445      39.4%
+    building       -> tree              59,320    44,749 152,561 -14,571      57.0%
+    tree           -> building          58,180    41,982 134,814 -16,198      58.1%
+    building       -> road             213,841    41,437 679,090-172,404      83.8%
+    water          -> pavement          11,440    40,611  27,954 +29,171      22.0%
+    grass          -> water             47,612    33,448  35,311 -14,164      58.7%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    road           -> pavement      5,910,79511,904,947    1.71    72.5%  ○ feasible
+    grass          -> cropland      5,343,7403,976,476    1.24    38.3%  ★ prime target
+    pavement       -> road          2,671,5327,488,766    0.88    70.1%  ○ feasible
+    cropland       -> grass         2,434,7815,104,042    0.46    72.3%  ○ feasible
+    building       -> pavement      1,478,767 398,587    0.34    16.5%  ★ prime target
+    cropland       -> bareland       490,3611,515,818    0.32    56.1%  ★ prime target
+    bareland       -> pavement      1,345,633  41,348    0.29     8.1%  ★ prime target
+    bareland       -> grass         1,365,562  20,686    0.26     4.8%  ★ prime target
+    tree           -> grass         1,343,7401,567,515    0.25    51.9%  ★ prime target
+    bareland       -> cropland       888,275 497,180    0.24    58.5%  ★ prime target
+    grass          -> tree          1,183,9821,520,264    0.20    58.3%  ★ prime target
+    grass          -> pavement       518,464 477,813    0.09    42.7%  ★ prime target
+    cropland       -> tree           340,021 254,660    0.07    48.8%  ★ prime target
+    cropland       -> pavement       311,138  27,919    0.07     8.5%  ★ prime target
+    water          -> tree            50,005  32,560    0.04    47.3%  — negligible
+    tree           -> cropland       163,862 780,364    0.04    78.9%  — negligible
+    grass          -> water           33,448  47,612    0.04    51.0%  — negligible
+    building       -> grass          181,611  90,824    0.04    30.2%  — negligible
+    water          -> pavement        40,611  11,440    0.04    27.1%  — negligible
+    cropland       -> road            84,275 102,091    0.03    50.8%  — negligible
+    water          -> grass           31,985  30,320    0.03    56.5%  — negligible
+    tree           -> pavement       126,860  79,894    0.03    32.6%  — negligible
+    pavement       -> building       155,025 979,498    0.03    89.7%  — negligible
+    pavement       -> grass          175,692 373,345    0.03    72.5%  — negligible
+    bareland       -> tree           106,289  21,365    0.02    38.8%  — negligible
+    building       -> water           17,184  10,637    0.02    30.8%  — negligible
+    bareland       -> road            55,769  23,347    0.02    44.4%  — negligible
+    road           -> grass           86,026  12,880    0.02    17.4%  — negligible
+    water          -> bareland        14,496  76,614    0.02    82.8%  — negligible
+    road           -> water           13,499   4,102    0.02    20.1%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  road -> pavement                     1.71       1.71        22.6%
+       2  grass -> cropland                    1.24       2.95        39.0%
+       3  pavement -> road                     0.88       3.82        50.5%
+       4  cropland -> grass                    0.46       4.29        56.7%
+       5  building -> pavement                 0.34       4.63        61.2%
+       6  cropland -> bareland                 0.32       4.95        65.5%
+       7  bareland -> pavement                 0.29       5.24        69.3%
+       8  bareland -> grass                    0.26       5.51        72.8%
+       9  tree -> grass                        0.25       5.76        76.2%
+      10  bareland -> cropland                 0.24       6.00        79.3%
+      11  grass -> tree                        0.20       6.20        82.0%
+      12  grass -> pavement                    0.09       6.29        83.2%
+      13  cropland -> tree                     0.07       6.36        84.2%
+      14  cropland -> pavement                 0.07       6.43        85.0%
+      15  water -> tree                        0.04       6.48        85.6%
+      16  tree -> cropland                     0.04       6.52        86.2%
+      17  grass -> water                       0.04       6.56        86.7%
+      18  building -> grass                    0.04       6.60        87.2%
+      19  water -> pavement                    0.04       6.63        87.7%
+      20  cropland -> road                     0.03       6.66        88.1%
+======================================================================
+
+margin_thr = 0.2
+  Low-margin pixels : 137,209,429  (36.53% of valid)
+    GT==winner (correct, flip=damage): 67,183,408  (49.0%)
+    GT==runnerup (rescuable)         : 39,953,639  (29.1%)
+    GT==other  (lateral)             : 30,072,382  (21.9%)
+  Oracle mIoU : 55.39%   ceiling = +11.19 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    bareland         14.06   23.88  +9.83
+    background       17.14   17.14  +0.00
+    pavement         27.86   45.74  +17.88
+    grass            42.94   57.10  +14.16
+    cropland         44.14   66.00  +21.86
+    road             45.89   69.63  +23.74
+    tree             63.91   70.43  +6.52
+    water            66.56   69.94  +3.38
+    building         75.30   78.65  +3.35
+    mIoU             44.20   55.39  +11.19
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    grass          -> cropland       7,493,457 8,060,5361,413,131+567,079      48.2%
+    road           -> pavement      14,205,559 6,995,6781,223,542-7,209,881      67.0%
+    pavement       -> road          10,948,579 3,740,0491,997,917-7,208,530      74.5%
+    cropland       -> grass          8,471,642 3,486,8351,449,671-4,984,807      70.8%
+    building       -> pavement         909,793 2,507,402 350,500+1,597,609      26.6%
+    tree           -> grass          3,230,486 2,465,491 683,891-764,995      56.7%
+    grass          -> tree           3,090,321 2,408,433 545,706-681,888      56.2%
+    bareland       -> pavement          85,187 2,111,718 386,671+2,026,531       3.9%
+    bareland       -> grass             49,411 1,683,395 885,288+1,633,984       2.9%
+    bareland       -> cropland         942,214 1,148,0883,221,235+205,874      45.1%
+    cropland       -> tree             482,371   830,631 577,620+348,260      36.7%
+    grass          -> pavement         880,654   762,502 260,027-118,152      53.6%
+    cropland       -> bareland       2,939,035   547,7012,617,024-2,391,334      84.3%
+    cropland       -> pavement          56,848   530,713  93,457+473,865       9.7%
+    building       -> grass            202,278   314,535 526,011+112,257      39.1%
+    tree           -> cropland       1,850,206   268,6281,201,843-1,581,578      87.3%
+    pavement       -> grass            498,403   221,320  86,100-277,083      69.2%
+    pavement       -> building       1,442,612   205,400 174,753-1,237,212      87.5%
+    tree           -> pavement         152,229   196,615 197,030 +44,386      43.6%
+    bareland       -> tree              33,457   130,220 743,469 +96,763      20.4%
+    cropland       -> road             120,649   116,351 344,150  -4,298      50.9%
+    road           -> grass             18,981   107,201  75,608 +88,220      15.0%
+    grass          -> building         410,476    94,455 366,000-316,021      81.3%
+    grass          -> water             82,190    73,401  58,912  -8,789      52.8%
+    building       -> tree             121,994    73,331 269,930 -48,663      62.5%
+    tree           -> building         113,843    71,058 216,766 -42,785      61.6%
+    bareland       -> road              84,908    66,5051,985,461 -18,403      56.1%
+    building       -> road             535,015    61,1821,325,457-473,833      89.7%
+    water          -> pavement          19,417    58,086  43,162 +38,669      25.1%
+    water          -> bareland         103,038    55,580  52,945 -47,458      65.0%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    road           -> pavement      6,995,67814,205,559    2.06    72.9%  ○ feasible
+    grass          -> cropland      8,060,5367,493,457    1.88    44.1%  ★ prime target
+    pavement       -> road          3,740,04910,948,579    1.23    71.2%  ○ feasible
+    cropland       -> grass         3,486,8358,471,642    0.67    75.3%  △ hard
+    building       -> pavement      2,507,402 909,793    0.59    21.0%  ★ prime target
+    bareland       -> pavement      2,111,718  85,187    0.47    10.5%  ★ prime target
+    tree           -> grass         2,465,4913,230,486    0.47    54.9%  ★ prime target
+    grass          -> tree          2,408,4333,090,321    0.42    58.4%  ★ prime target
+    cropland       -> bareland       547,7012,939,035    0.36    69.1%  ○ feasible
+    bareland       -> grass         1,683,395  49,411    0.33     8.9%  ★ prime target
+    bareland       -> cropland      1,148,088 942,214    0.31    67.6%  ○ feasible
+    cropland       -> tree           830,631 482,371    0.17    42.6%  ★ prime target
+    grass          -> pavement       762,502 880,654    0.14    48.3%  ★ prime target
+    cropland       -> pavement       530,713  56,848    0.11    10.0%  ★ prime target
+    grass          -> water           73,401  82,190    0.09    45.0%  ★ prime target
+    water          -> bareland        55,580 103,038    0.07    62.9%  ○ feasible
+    tree           -> cropland       268,6281,850,206    0.07    84.4%  △ hard
+    building       -> grass          314,535 202,278    0.06    35.7%  ★ prime target
+    water          -> pavement        58,086  19,417    0.05    30.6%  ★ prime target
+    water          -> tree            53,665  96,851    0.05    71.3%  — negligible
+    cropland       -> road           116,351 120,649    0.04    47.0%  — negligible
+    tree           -> pavement       196,615 152,229    0.04    37.3%  — negligible
+    water          -> grass           43,188  56,435    0.04    64.2%  — negligible
+    pavement       -> building       205,4001,442,612    0.03    90.6%  — negligible
+    building       -> water           26,526  31,197    0.03    45.8%  — negligible
+    pavement       -> grass          221,320 498,403    0.03    73.7%  — negligible
+    bareland       -> tree           130,220  33,457    0.03    44.8%  — negligible
+    road           -> grass          107,201  18,981    0.03    19.9%  — negligible
+    bareland       -> road            66,505  84,908    0.02    70.9%  — negligible
+    building       -> road            61,182 535,015    0.02    85.6%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  road -> pavement                     2.06       2.06        18.4%
+       2  grass -> cropland                    1.88       3.94        35.2%
+       3  pavement -> road                     1.23       5.17        46.2%
+       4  cropland -> grass                    0.67       5.84        52.2%
+       5  building -> pavement                 0.59       6.42        57.4%
+       6  bareland -> pavement                 0.47       6.89        61.6%
+       7  tree -> grass                        0.47       7.36        65.7%
+       8  grass -> tree                        0.42       7.77        69.5%
+       9  cropland -> bareland                 0.36       8.13        72.7%
+      10  bareland -> grass                    0.33       8.46        75.6%
+      11  bareland -> cropland                 0.31       8.77        78.4%
+      12  cropland -> tree                     0.17       8.94        79.9%
+      13  grass -> pavement                    0.14       9.08        81.1%
+      14  cropland -> pavement                 0.11       9.19        82.1%
+      15  grass -> water                       0.09       9.28        82.9%
+      16  water -> bareland                    0.07       9.35        83.6%
+      17  tree -> cropland                     0.07       9.42        84.2%
+      18  building -> grass                    0.06       9.49        84.8%
+      19  water -> pavement                    0.05       9.54        85.2%
+      20  water -> tree                        0.05       9.58        85.7%
+======================================================================
+
+margin_thr = 0.3
+  Low-margin pixels : 170,659,618  (45.43% of valid)
+    GT==winner (correct, flip=damage): 86,521,949  (50.7%)
+    GT==runnerup (rescuable)         : 46,735,262  (27.4%)
+    GT==other  (lateral)             : 37,402,407  (21.9%)
+  Oracle mIoU : 57.47%   ceiling = +13.27 mIoU pts
+
+  Per-class IoU (baseline vs oracle):
+    class             base  oracle       Δ
+    bareland         14.06   25.38  +11.32
+    background       17.14   17.14  +0.00
+    pavement         27.86   48.06  +20.20
+    grass            42.94   60.50  +17.55
+    cropland         44.14   70.23  +26.09
+    road             45.89   72.99  +27.10
+    tree             63.91   72.46  +8.55
+    water            66.56   70.98  +4.41
+    building         75.30   79.54  +4.23
+    mIoU             44.20   57.47  +13.27
+
+  Top 30 winner->runnerup pairs (by rescuable pixels):
+    winner         -> runnerup         correct    rescue   other     net  breakeven
+    grass          -> cropland      10,001,431 9,362,4351,925,463-638,996      51.6%
+    road           -> pavement      15,013,217 7,407,5701,342,989-7,605,647      67.0%
+    pavement       -> road          12,836,820 4,410,0282,322,592-8,426,792      74.4%
+    cropland       -> grass         10,848,562 4,243,5561,831,669-6,605,006      71.9%
+    tree           -> grass          4,711,251 3,370,582 860,752-1,340,669      58.3%
+    building       -> pavement       1,502,550 3,203,601 434,482+1,701,051      31.9%
+    grass          -> tree           4,363,053 3,142,894 699,302-1,220,159      58.1%
+    bareland       -> pavement         290,335 2,215,061 399,798+1,924,726      11.6%
+    bareland       -> grass             52,571 1,765,493 948,360+1,712,922       2.9%
+    bareland       -> cropland       1,341,186 1,238,2133,609,606-102,973      52.0%
+    cropland       -> tree             674,074   983,559 663,871+309,485      40.7%
+    grass          -> pavement       1,148,205   870,158 319,146-278,047      56.9%
+    cropland       -> pavement          69,302   675,768 125,983+606,466       9.3%
+    cropland       -> bareland       5,397,171   643,8293,889,729-4,753,342      89.3%
+    building       -> grass            313,286   384,001 688,498 +70,715      44.9%
+    tree           -> cropland       2,777,111   361,2001,422,874-2,415,911      88.5%
+    tree           -> pavement         208,322   240,731 247,838 +32,409      46.4%
+    pavement       -> grass            561,883   237,686  91,488-324,197      70.3%
+    pavement       -> building       1,652,235   228,429 197,882-1,423,806      87.9%
+    bareland       -> tree              34,106   134,017 800,511 +99,911      20.3%
+    cropland       -> road             150,832   133,025 417,043 -17,807      53.1%
+    grass          -> building         537,458   115,249 430,108-422,209      82.3%
+    road           -> grass             22,177   114,218  82,668 +92,041      16.3%
+    building       -> tree             180,962    94,798 353,365 -86,164      65.6%
+    tree           -> building         161,081    91,868 271,263 -69,213      63.7%
+    grass          -> water             94,535    87,447  73,547  -7,088      51.9%
+    water          -> bareland         160,934    84,815  56,860 -76,119      65.5%
+    building       -> road             919,097    72,8541,902,175-846,243      92.7%
+    tree           -> road             173,563    70,717 327,281-102,846      71.1%
+    bareland       -> road             198,313    70,5662,307,585-127,747      73.8%
+    breakeven = correct/(correct+rescue): min arbiter precision to
+    net positive on this pair. Low breakeven + high rescue = best target.
+
+  --- Phase 1B: per-pair mIoU gain & mIoU-based breakeven ---
+
+  Per-pair mIoU oracle (single-pair flip, sorted by ΔmIoU):
+    winner         -> runnerup        rescue correct   ΔmIoU  BE_acc  verdict
+    road           -> pavement      7,407,57015,013,217    2.20    72.9%  ○ feasible
+    grass          -> cropland      9,362,43510,001,431    2.19    47.8%  ★ prime target
+    pavement       -> road          4,410,02812,836,820    1.45    71.3%  ○ feasible
+    cropland       -> grass         4,243,55610,848,562    0.82    76.3%  △ hard
+    building       -> pavement      3,203,6011,502,550    0.75    25.7%  ★ prime target
+    tree           -> grass         3,370,5824,711,251    0.64    56.6%  ★ prime target
+    grass          -> tree          3,142,8944,363,053    0.55    60.4%  ○ feasible
+    bareland       -> pavement      2,215,061 290,335    0.49    27.7%  ★ prime target
+    cropland       -> bareland       643,8295,397,171    0.42    77.9%  △ hard
+    bareland       -> grass         1,765,493  52,571    0.34     9.0%  ★ prime target
+    bareland       -> cropland      1,238,2131,341,186    0.33    73.4%  ○ feasible
+    cropland       -> tree           983,559 674,074    0.21    46.7%  ★ prime target
+    grass          -> pavement       870,1581,148,205    0.15    51.7%  ★ prime target
+    cropland       -> pavement       675,768  69,302    0.14     9.6%  ★ prime target
+    water          -> bareland        84,815 160,934    0.11    63.5%  ○ feasible
+    grass          -> water           87,447  94,535    0.10    44.1%  ★ prime target
+    tree           -> cropland       361,2002,777,111    0.10    85.8%  △ hard
+    building       -> grass          384,001 313,286    0.08    41.4%  ★ prime target
+    water          -> pavement        67,301  28,046    0.06    35.5%  ★ prime target
+    water          -> grass           59,497  74,300    0.05    63.1%  ○ feasible
+    tree           -> pavement       240,731 208,322    0.05    40.0%  ★ prime target
+    cropland       -> road           133,025 150,832    0.05    49.2%  — negligible
+    water          -> tree            55,741 200,604    0.05    83.2%  — negligible
+    pavement       -> building       228,4291,652,235    0.04    90.8%  — negligible
+    building       -> water           30,900  49,071    0.04    53.3%  — negligible
+    pavement       -> grass          237,686 561,883    0.03    74.6%  — negligible
+    tree           -> water           27,305 280,537    0.03    88.2%  — negligible
+    road           -> water           25,938   6,056    0.03    16.2%  — negligible
+    bareland       -> water           25,370 119,421    0.03    83.8%  — negligible
+    building       -> road            72,854 919,097    0.03    89.6%  — negligible
+
+  Cumulative mIoU gain (greedy top-K pairs, independent approx.):
+       K  pair                           pair ΔmIoU  cum ΔmIoU % of ceiling
+       1  road -> pavement                     2.20       2.20        16.6%
+       2  grass -> cropland                    2.19       4.38        33.0%
+       3  pavement -> road                     1.45       5.84        44.0%
+       4  cropland -> grass                    0.82       6.65        50.1%
+       5  building -> pavement                 0.75       7.41        55.8%
+       6  tree -> grass                        0.64       8.05        60.6%
+       7  grass -> tree                        0.55       8.59        64.7%
+       8  bareland -> pavement                 0.49       9.09        68.4%
+       9  cropland -> bareland                 0.42       9.51        71.6%
+      10  bareland -> grass                    0.34       9.85        74.2%
+      11  bareland -> cropland                 0.33      10.18        76.7%
+      12  cropland -> tree                     0.21      10.39        78.3%
+      13  grass -> pavement                    0.15      10.54        79.4%
+      14  cropland -> pavement                 0.14      10.69        80.5%
+      15  water -> bareland                    0.11      10.80        81.4%
+      16  grass -> water                       0.10      10.90        82.1%
+      17  tree -> cropland                     0.10      11.00        82.9%
+      18  building -> grass                    0.08      11.08        83.5%
+      19  water -> pavement                    0.06      11.14        83.9%
+      20  water -> grass                       0.05      11.19        84.3%
+      21  tree -> pavement                     0.05      11.24        84.7%
+======================================================================
+
+Backfill bucket (prob_thd=0.1 reverting foreground top1 -> bg):
+  Backfilled foreground pixels : 14,722,024  (3.92% of valid)
+    GT == raw top1 (threshold-recoverable): 4,159,484  (28.3%)
+  These are recoverable by a class-specific / lower threshold, NOT by top1->top2 rerank.
+
+  Top backfilled classes (raw top1 reverted to bg):
+    class           backfilled    GT==top1  recover%
+    pavement         3,809,608   2,601,615     68.3%
+    grass            2,102,422     768,691     36.6%
+    building         2,526,344     262,687     10.4%
+    tree             1,022,978     251,178     24.6%
+    bareland         2,257,913     129,638      5.7%
+    road             2,393,831     101,866      4.3%
+    cropland           448,855      21,962      4.9%
+    water              160,073      21,847     13.6%
+    high GT==top1 % => a lower threshold for that class recovers it directly (cheap, no CLIP).
+======================================================================
+
+Interpretation guide:
+  NOTE: the oracle is DOUBLE-OPTIMISTIC (perfect rescue + zero damage).
+  A real arbiter (CLIP) also damages GT==winner pixels, so realistic
+  gain is a fraction of the ceiling. Decide on these, not the ceiling alone:
+    1. per-class oracle Δ : which classes actually have headroom
+       (read this, NOT the aggregate rescuable%, since mIoU is per-class).
+    2. a pair with HIGH rescue AND LOW breakeven precision
+       => CLIP has big upside and an easy precision bar => good target.
+    3. if every pair has high breakeven (>~60%) or rescue is tiny
+       => CLIP must be near-perfect to help => not worth building.
