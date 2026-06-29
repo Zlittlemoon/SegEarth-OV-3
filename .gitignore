@@ -19,3 +19,6 @@ figs*.pt
 train_weights
 tmp_multiproc
 .dist_test
+check/
+dlrsd_text_prompt_exp_log/
+outputs/
