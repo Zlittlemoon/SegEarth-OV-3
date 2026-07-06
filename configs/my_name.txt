@@ -1,6 +1,7 @@
+background
+building,house
 road
-building
-grass
-tree
-car
-clutter
+water
+barren,bareland,soil
+forest,tree
+agricultural

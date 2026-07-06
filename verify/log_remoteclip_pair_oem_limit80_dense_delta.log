@@ -1,0 +1,175 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/torch/serialization.py:1074: UserWarning: 'torch.load' received a zip file that looks like a TorchScript archive dispatching to 'torch.jit.load' (call 'torch.jit.load' directly to silence this warning)
+  warnings.warn("'torch.load' received a zip file that looks like a TorchScript archive"
+Device: cuda
+Loading CLIP from /home/108/u108008/code/SegEarth-OV-3/weights/clip/ViT-B-32.pt ...
+Loading RemoteCLIP from /home/108/u108008/code/SegEarth-OV-3/weights/RemoteCLIP/RemoteCLIP-ViT-B-32.pt ...
+Config  : configs/cfg_openearthmap.py
+Classes (9): ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+margin_thr: 0.1  |  delta sweep: [-0.1, -0.08, -0.06, -0.04, -0.02, 0.0, 0.01, 0.02, 0.03, 0.04, 0.05]
+Limit: 80
+  CLIP text features: torch.Size([9, 512])
+  RemoteCLIP text features: torch.Size([9, 512])
+  processed 20 images ...
+  processed 40 images ...
+  processed 60 images ...
+  processed 80 images ...
+
+Total images: 80
+Baseline mIoU: 45.78%
+
+================================================================================
+Pair: grass -> cropland   (margin_thr=0.1)
+  CC patches collected: 2891
+  always-flip ΔmIoU (baseline): +0.554
+
+  [CLIP] 2891 CC patches: rescue=1199 correct=1333 other=359
+    sim_delta: mean=-0.0043  std=0.0050  P(>0)=17.3%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.08    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.06    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.04    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.02    2884      0.2%      0.415      0.999     0.63            0.07 ★
+     0.00     500     82.7%      0.418      0.174     0.46           -0.10
+     0.01      20     99.3%      0.700      0.012     0.05           -0.51
+     0.02       2     99.9%      1.000      0.002     0.00           -0.55
+     0.03       0    100.0%        nan      0.000     0.00           -0.55
+     0.04       0    100.0%        nan      0.000     0.00           -0.55
+     0.05       0    100.0%        nan      0.000     0.00           -0.55
+  => best delta=-0.02: ΔmIoU=+0.626  vs always-flip=+0.072  (VLM beats always-flip ★)
+
+  [RemoteCLIP] 2891 CC patches: rescue=1199 correct=1333 other=359
+    sim_delta: mean=+0.0176  std=0.0113  P(>0)=95.2%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.08    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.06    2891      0.0%      0.415      1.000     0.55            0.00
+    -0.04    2887      0.1%      0.414      0.997     0.51           -0.04
+    -0.02    2862      1.0%      0.413      0.987     0.55           -0.01
+     0.00    2752      4.8%      0.414      0.950     0.27           -0.29
+     0.01    2291     20.8%      0.454      0.867     0.16           -0.40
+     0.02    1184     59.0%      0.580      0.573     0.07           -0.48
+     0.03     355     87.7%      0.769      0.228     0.03           -0.52
+     0.04      37     98.7%      0.946      0.029     0.01           -0.55
+     0.05       2     99.9%      1.000      0.002     0.00           -0.55
+  => best delta=-0.10: ΔmIoU=+0.554  vs always-flip=+0.000  (VLM <= always-flip)
+================================================================================
+Pair: building -> pavement   (margin_thr=0.1)
+  CC patches collected: 4303
+  always-flip ΔmIoU (baseline): +0.249
+
+  [CLIP] 4303 CC patches: rescue=3176 correct=750 other=377
+    sim_delta: mean=-0.0009  std=0.0081  P(>0)=47.7%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.08    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.06    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.04    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.02    4243      1.4%      0.738      0.986     0.24           -0.01
+     0.00    2053     52.3%      0.764      0.494     0.10           -0.15
+     0.01     327     92.4%      0.734      0.076     0.02           -0.23
+     0.02      13     99.7%      0.769      0.003     0.00           -0.25
+     0.03       0    100.0%        nan      0.000     0.00           -0.25
+     0.04       0    100.0%        nan      0.000     0.00           -0.25
+     0.05       0    100.0%        nan      0.000     0.00           -0.25
+  => best delta=-0.10: ΔmIoU=+0.249  vs always-flip=+0.000  (VLM <= always-flip)
+
+  [RemoteCLIP] 4303 CC patches: rescue=3176 correct=750 other=377
+    sim_delta: mean=+0.0090  std=0.0091  P(>0)=84.4%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.08    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.06    4303      0.0%      0.738      1.000     0.25            0.00
+    -0.04    4302      0.0%      0.738      1.000     0.25           -0.00
+    -0.02    4298      0.1%      0.738      0.999     0.24           -0.00
+     0.00    3633     15.6%      0.734      0.839     0.18           -0.07
+     0.01    2022     53.0%      0.747      0.475     0.11           -0.14
+     0.02     447     89.6%      0.767      0.108     0.03           -0.22
+     0.03      32     99.3%      0.781      0.008     0.00           -0.24
+     0.04       1    100.0%      1.000      0.000     0.00           -0.25
+     0.05       0    100.0%        nan      0.000     0.00           -0.25
+  => best delta=-0.10: ΔmIoU=+0.249  vs always-flip=+0.000  (VLM <= always-flip)
+================================================================================
+Pair: bareland -> pavement   (margin_thr=0.1)
+  CC patches collected: 1466
+  always-flip ΔmIoU (baseline): +0.434
+
+  [CLIP] 1466 CC patches: rescue=1259 correct=0 other=207
+    sim_delta: mean=+0.0091  std=0.0076  P(>0)=91.1%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.08    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.06    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.04    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.02    1465      0.1%      0.859      0.999     0.43           -0.00
+     0.00    1336      8.9%      0.868      0.921     0.42           -0.01
+     0.01     619     57.8%      0.855      0.420     0.33           -0.10
+     0.02     117     92.0%      0.863      0.080     0.27           -0.16
+     0.03      15     99.0%      0.867      0.010     0.18           -0.25
+     0.04       1     99.9%      1.000      0.001     0.01           -0.43
+     0.05       0    100.0%        nan      0.000     0.00           -0.43
+  => best delta=-0.10: ΔmIoU=+0.434  vs always-flip=+0.000  (VLM <= always-flip)
+
+  [RemoteCLIP] 1466 CC patches: rescue=1259 correct=0 other=207
+    sim_delta: mean=-0.0046  std=0.0187  P(>0)=35.5%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.08    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.06    1466      0.0%      0.859      1.000     0.43            0.00
+    -0.04    1457      0.6%      0.859      0.994     0.43           -0.00
+    -0.02    1141     22.2%      0.862      0.781     0.37           -0.06
+     0.00     521     64.5%      0.831      0.344     0.29           -0.15
+     0.01     322     78.0%      0.795      0.203     0.16           -0.27
+     0.02     169     88.5%      0.710      0.095     0.12           -0.31
+     0.03      80     94.5%      0.650      0.041     0.02           -0.41
+     0.04      29     98.0%      0.483      0.011     0.00           -0.43
+     0.05       6     99.6%      0.167      0.001     0.00           -0.43
+  => best delta=-0.10: ΔmIoU=+0.434  vs always-flip=+0.000  (VLM <= always-flip)
+================================================================================
+Pair: bareland -> grass   (margin_thr=0.1)
+  CC patches collected: 958
+  always-flip ΔmIoU (baseline): +0.151
+
+  [CLIP] 958 CC patches: rescue=378 correct=20 other=560
+    sim_delta: mean=+0.0081  std=0.0090  P(>0)=81.8%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10     958      0.0%      0.395      1.000     0.15            0.00
+    -0.08     958      0.0%      0.395      1.000     0.15            0.00
+    -0.06     958      0.0%      0.395      1.000     0.15            0.00
+    -0.04     958      0.0%      0.395      1.000     0.15            0.00
+    -0.02     955      0.3%      0.396      1.000     0.15           -0.00
+     0.00     784     18.2%      0.417      0.865     0.14           -0.01
+     0.01     378     60.5%      0.471      0.471     0.04           -0.11
+     0.02      96     90.0%      0.573      0.146     0.02           -0.13
+     0.03       9     99.1%      0.778      0.019     0.01           -0.14
+     0.04       2     99.8%      1.000      0.005     0.00           -0.15
+     0.05       0    100.0%        nan      0.000     0.00           -0.15
+  => best delta=-0.10: ΔmIoU=+0.151  vs always-flip=+0.000  (VLM <= always-flip)
+
+  [RemoteCLIP] 958 CC patches: rescue=378 correct=20 other=560
+    sim_delta: mean=-0.0135  std=0.0271  P(>0)=33.4%
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU  vs always-flip
+    -0.10     958      0.0%      0.395      1.000     0.15            0.00
+    -0.08     958      0.0%      0.395      1.000     0.15            0.00
+    -0.06     930      2.9%      0.403      0.992     0.14           -0.01
+    -0.04     776     19.0%      0.436      0.894     0.14           -0.01
+    -0.02     526     45.1%      0.462      0.643     0.04           -0.11
+     0.00     320     66.6%      0.487      0.413     0.03           -0.12
+     0.01     222     76.8%      0.486      0.286     0.02           -0.13
+     0.02     132     86.2%      0.455      0.159     0.01           -0.14
+     0.03      53     94.5%      0.377      0.053     0.00           -0.15
+     0.04      11     98.9%      0.273      0.008     0.00           -0.15
+     0.05       3     99.7%      0.333      0.003     0.00           -0.15
+  => best delta=-0.10: ΔmIoU=+0.151  vs always-flip=+0.000  (VLM <= always-flip)
+================================================================================
+
+Cross-model summary (best delta per pair):
+  pair                           always-flip      CLIP ΔmIoU    CLIP vs AF  RemoteCLIP ΔmIoU  RemoteCLIP vs AF
+  grass -> cropland                   +0.554          +0.626        +0.072          +0.554        +0.000
+  building -> pavement                +0.249          +0.249        +0.000          +0.249        +0.000
+  bareland -> pavement                +0.434          +0.434        +0.000          +0.434        +0.000
+  bareland -> grass                   +0.151          +0.151        +0.000          +0.151        +0.000
+
+Done.

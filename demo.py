@@ -4,7 +4,7 @@ from torchvision import transforms
 from mmseg.structures import SegDataSample
 from segearthov3_segmentor_merge import SegEarthOV3Segmentation
 
-img_path = 'data/Potsdam/img_dir/val/2_13_5120_0_5632_512.png'
+img_path = 'data/LoveDA/img_dir/val/3514.png'
 
 name_list = ['background', 'building,house', 'road', 'water', 'barren,bareland,soil',
              'forest,tree', 'agricultural']
@@ -52,4 +52,4 @@ ax[1].axis('off')
 plt.tight_layout()
 # plt.show()
 
-plt.savefig('resources/seg_pred_loveda_2_13_5120_0_5632_512_0.png', bbox_inches='tight')
+plt.savefig('visualize/seg_pred_loveda_3514.png', bbox_inches='tight')

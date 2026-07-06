@@ -1,0 +1,74 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+Device: cuda
+Config: configs/cfg_loveda.py
+margin_thr=0.1  conf_thr=0.3  r_inner=0  r_outers=[8, 16, 32]
+Limit: 80
+  processed 20 images ...
+  processed 40 images ...
+  processed 60 images ...
+  processed 80 images ...
+
+Total images: 80
+Baseline mIoU: 40.82%
+
+================================================================================
+
+Pair: agricultural -> forest   (margin_thr=0.1, conf_thr=0.3)
+----------------------------------------------------------------------
+  n_cc=145  rescue=82(56.6%)  correct=8(5.5%)  other=55(37.9%)
+
+   r_outer   abstain   nbr==GT   nbr==top2   nbr==top1   rescue:nbr==top2   correct:nbr==top1    ΔmIoU_af
+  -------------------------------------------------------------------------------------------------------
+         8     69.7%     44.4%        0.0%      100.0%               0.0%              100.0%  (see below)
+        16     64.1%     40.0%        1.9%       96.2%               0.0%              100.0%  (see below)
+        32     52.4%     23.3%        4.3%       91.3%               0.0%               87.5%  (see below)
+
+  Key baseline rates (random guess):
+    If neighbor is uninformative, nbr==GT rate ≈ rescue_rate = 91.1% (among rescue+correct CCs)
+    If neighbor always picks winner (top1): nbr==GT rate for correct = 100%, rescue = 0%
+
+
+Pair: agricultural -> barren   (margin_thr=0.1, conf_thr=0.3)
+----------------------------------------------------------------------
+  n_cc=703  rescue=266(37.8%)  correct=192(27.3%)  other=245(34.9%)
+
+   r_outer   abstain   nbr==GT   nbr==top2   nbr==top1   rescue:nbr==top2   correct:nbr==top1    ΔmIoU_af
+  -------------------------------------------------------------------------------------------------------
+         8     51.6%     51.2%        3.8%       87.9%               7.9%               91.7%  (see below)
+        16     33.1%     45.6%        4.3%       82.6%               6.7%               85.6%  (see below)
+        32     13.7%     42.8%        8.6%       75.1%              10.6%               79.1%  (see below)
+
+  Key baseline rates (random guess):
+    If neighbor is uninformative, nbr==GT rate ≈ rescue_rate = 58.1% (among rescue+correct CCs)
+    If neighbor always picks winner (top1): nbr==GT rate for correct = 100%, rescue = 0%
+
+
+Pair: agricultural -> water   (margin_thr=0.1, conf_thr=0.3)
+----------------------------------------------------------------------
+  n_cc=110  rescue=74(67.3%)  correct=0(0.0%)  other=36(32.7%)
+
+   r_outer   abstain   nbr==GT   nbr==top2   nbr==top1   rescue:nbr==top2   correct:nbr==top1    ΔmIoU_af
+  -------------------------------------------------------------------------------------------------------
+         8     75.5%     26.7%       14.8%       70.4%              26.7%                nan%  (see below)
+        16     63.6%     19.0%       15.0%       55.0%              19.0%                nan%  (see below)
+        32     44.5%     26.5%       18.0%       50.8%              26.5%                nan%  (see below)
+
+  Key baseline rates (random guess):
+    If neighbor is uninformative, nbr==GT rate ≈ rescue_rate = 100.0% (among rescue+correct CCs)
+    If neighbor always picks winner (top1): nbr==GT rate for correct = 100%, rescue = 0%
+
+================================================================================
+Cross-pair summary (r_outer sweep, nbr_agree_gt = key metric):
+
+  pair                              r=8 nbr_agree_gt   abstain   r=16 nbr_agree_gt   abstain   r=32 nbr_agree_gt   abstain
+  ------------------------------------------------------------------------------------------------------------------------
+  agricultural -> forest                       44.4%     69.7%               40.0%     64.1%               23.3%     52.4%
+  agricultural -> barren                       51.2%     51.6%               45.6%     33.1%               42.8%     13.7%
+  agricultural -> water                        26.7%     75.5%               19.0%     63.6%               26.5%     44.5%
+
+Note: nbr_agree_gt is the fraction of CCs where neighbor majority class == GT.
+      Random baseline = rescue_rate (if neighbor always picks winner,
+      nbr_agree_gt = correct_rate; if always picks runnerup = rescue_rate).
+      A value significantly above max(rescue_rate, correct_rate) means the
+      neighbor context is informative beyond simple class-frequency prior.

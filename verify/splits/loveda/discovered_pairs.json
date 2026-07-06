@@ -1,0 +1,128 @@
+[
+  {
+    "winner": "agricultural",
+    "runnerup": "barren",
+    "w_idx": 6,
+    "ru_idx": 4,
+    "n_cc": 10383,
+    "n_pixel": 5548025,
+    "rescue_rate": 0.3528
+  },
+  {
+    "winner": "barren",
+    "runnerup": "agricultural",
+    "w_idx": 4,
+    "ru_idx": 6,
+    "n_cc": 9357,
+    "n_pixel": 5225309,
+    "rescue_rate": 0.3741
+  },
+  {
+    "winner": "forest",
+    "runnerup": "agricultural",
+    "w_idx": 5,
+    "ru_idx": 6,
+    "n_cc": 9247,
+    "n_pixel": 6890621,
+    "rescue_rate": 0.2131
+  },
+  {
+    "winner": "agricultural",
+    "runnerup": "forest",
+    "w_idx": 6,
+    "ru_idx": 5,
+    "n_cc": 9031,
+    "n_pixel": 7031082,
+    "rescue_rate": 0.5168
+  },
+  {
+    "winner": "water",
+    "runnerup": "agricultural",
+    "w_idx": 3,
+    "ru_idx": 6,
+    "n_cc": 1831,
+    "n_pixel": 1261338,
+    "rescue_rate": 0.0215
+  },
+  {
+    "winner": "agricultural",
+    "runnerup": "water",
+    "w_idx": 6,
+    "ru_idx": 3,
+    "n_cc": 1332,
+    "n_pixel": 890066,
+    "rescue_rate": 0.861
+  },
+  {
+    "winner": "road",
+    "runnerup": "agricultural",
+    "w_idx": 2,
+    "ru_idx": 6,
+    "n_cc": 837,
+    "n_pixel": 138194,
+    "rescue_rate": 0.3603
+  },
+  {
+    "winner": "agricultural",
+    "runnerup": "road",
+    "w_idx": 6,
+    "ru_idx": 2,
+    "n_cc": 699,
+    "n_pixel": 132669,
+    "rescue_rate": 0.1413
+  },
+  {
+    "winner": "forest",
+    "runnerup": "barren",
+    "w_idx": 5,
+    "ru_idx": 4,
+    "n_cc": 483,
+    "n_pixel": 83513,
+    "rescue_rate": 0.0208
+  },
+  {
+    "winner": "barren",
+    "runnerup": "road",
+    "w_idx": 4,
+    "ru_idx": 2,
+    "n_cc": 451,
+    "n_pixel": 130647,
+    "rescue_rate": 0.2373
+  },
+  {
+    "winner": "road",
+    "runnerup": "barren",
+    "w_idx": 2,
+    "ru_idx": 4,
+    "n_cc": 356,
+    "n_pixel": 119368,
+    "rescue_rate": 0.5063
+  },
+  {
+    "winner": "barren",
+    "runnerup": "forest",
+    "w_idx": 4,
+    "ru_idx": 5,
+    "n_cc": 263,
+    "n_pixel": 104714,
+    "rescue_rate": 0.5834
+  },
+  {
+    "winner": "building",
+    "runnerup": "agricultural",
+    "w_idx": 1,
+    "ru_idx": 6,
+    "n_cc": 241,
+    "n_pixel": 35433,
+    "rescue_rate": 0.6411
+  },
+  {
+    "winner": "water",
+    "runnerup": "barren",
+    "w_idx": 3,
+    "ru_idx": 4,
+    "n_cc": 228,
+    "n_pixel": 130386,
+    "rescue_rate": 0.2094
+  }
+]

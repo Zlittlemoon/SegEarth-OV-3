@@ -1,0 +1,425 @@
+[
+  {
+    "winner": "pavement",
+    "runnerup": "road",
+    "w_idx": 3,
+    "ru_idx": 4,
+    "n_cc": 31119,
+    "n_pixel": 4999506,
+    "rescue_rate": 0.2522
+  },
+  {
+    "winner": "road",
+    "runnerup": "pavement",
+    "w_idx": 4,
+    "ru_idx": 3,
+    "n_cc": 12880,
+    "n_pixel": 9338184,
+    "rescue_rate": 0.307
+  },
+  {
+    "winner": "tree",
+    "runnerup": "grass",
+    "w_idx": 5,
+    "ru_idx": 2,
+    "n_cc": 10747,
+    "n_pixel": 1453416,
+    "rescue_rate": 0.3494
+  },
+  {
+    "winner": "grass",
+    "runnerup": "tree",
+    "w_idx": 2,
+    "ru_idx": 5,
+    "n_cc": 10134,
+    "n_pixel": 1340615,
+    "rescue_rate": 0.4275
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "grass",
+    "w_idx": 7,
+    "ru_idx": 2,
+    "n_cc": 9151,
+    "n_pixel": 4155462,
+    "rescue_rate": 0.2042
+  },
+  {
+    "winner": "grass",
+    "runnerup": "cropland",
+    "w_idx": 2,
+    "ru_idx": 7,
+    "n_cc": 8560,
+    "n_pixel": 5176176,
+    "rescue_rate": 0.5793
+  },
+  {
+    "winner": "building",
+    "runnerup": "pavement",
+    "w_idx": 8,
+    "ru_idx": 3,
+    "n_cc": 6903,
+    "n_pixel": 701958,
+    "rescue_rate": 0.7414
+  },
+  {
+    "winner": "grass",
+    "runnerup": "bareland",
+    "w_idx": 2,
+    "ru_idx": 1,
+    "n_cc": 5127,
+    "n_pixel": 754344,
+    "rescue_rate": 0.0032
+  },
+  {
+    "winner": "building",
+    "runnerup": "road",
+    "w_idx": 8,
+    "ru_idx": 4,
+    "n_cc": 4152,
+    "n_pixel": 273581,
+    "rescue_rate": 0.0632
+  },
+  {
+    "winner": "grass",
+    "runnerup": "pavement",
+    "w_idx": 2,
+    "ru_idx": 3,
+    "n_cc": 3924,
+    "n_pixel": 367070,
+    "rescue_rate": 0.4425
+  },
+  {
+    "winner": "pavement",
+    "runnerup": "building",
+    "w_idx": 3,
+    "ru_idx": 8,
+    "n_cc": 3663,
+    "n_pixel": 450838,
+    "rescue_rate": 0.1028
+  },
+  {
+    "winner": "tree",
+    "runnerup": "cropland",
+    "w_idx": 5,
+    "ru_idx": 7,
+    "n_cc": 3229,
+    "n_pixel": 817697,
+    "rescue_rate": 0.1409
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "grass",
+    "w_idx": 1,
+    "ru_idx": 2,
+    "n_cc": 2792,
+    "n_pixel": 737709,
+    "rescue_rate": 0.5941
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "bareland",
+    "w_idx": 7,
+    "ru_idx": 1,
+    "n_cc": 2756,
+    "n_pixel": 1223121,
+    "rescue_rate": 0.0767
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "pavement",
+    "w_idx": 1,
+    "ru_idx": 3,
+    "n_cc": 2745,
+    "n_pixel": 963058,
+    "rescue_rate": 0.8567
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "tree",
+    "w_idx": 7,
+    "ru_idx": 5,
+    "n_cc": 2729,
+    "n_pixel": 481689,
+    "rescue_rate": 0.3716
+  },
+  {
+    "winner": "grass",
+    "runnerup": "road",
+    "w_idx": 2,
+    "ru_idx": 4,
+    "n_cc": 2522,
+    "n_pixel": 187549,
+    "rescue_rate": 0.0139
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "cropland",
+    "w_idx": 1,
+    "ru_idx": 7,
+    "n_cc": 2514,
+    "n_pixel": 1828470,
+    "rescue_rate": 0.2776
+  },
+  {
+    "winner": "tree",
+    "runnerup": "bareland",
+    "w_idx": 5,
+    "ru_idx": 1,
+    "n_cc": 2385,
+    "n_pixel": 185776,
+    "rescue_rate": 0.0032
+  },
+  {
+    "winner": "pavement",
+    "runnerup": "bareland",
+    "w_idx": 3,
+    "ru_idx": 1,
+    "n_cc": 2203,
+    "n_pixel": 466292,
+    "rescue_rate": 0.0062
+  },
+  {
+    "winner": "grass",
+    "runnerup": "building",
+    "w_idx": 2,
+    "ru_idx": 8,
+    "n_cc": 2191,
+    "n_pixel": 187697,
+    "rescue_rate": 0.0714
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "road",
+    "w_idx": 1,
+    "ru_idx": 4,
+    "n_cc": 2180,
+    "n_pixel": 746250,
+    "rescue_rate": 0.0334
+  },
+  {
+    "winner": "building",
+    "runnerup": "grass",
+    "w_idx": 8,
+    "ru_idx": 2,
+    "n_cc": 2133,
+    "n_pixel": 161841,
+    "rescue_rate": 0.3111
+  },
+  {
+    "winner": "pavement",
+    "runnerup": "grass",
+    "w_idx": 3,
+    "ru_idx": 2,
+    "n_cc": 1883,
+    "n_pixel": 184089,
+    "rescue_rate": 0.2156
+  },
+  {
+    "winner": "building",
+    "runnerup": "bareland",
+    "w_idx": 8,
+    "ru_idx": 1,
+    "n_cc": 1819,
+    "n_pixel": 186786,
+    "rescue_rate": 0.0337
+  },
+  {
+    "winner": "tree",
+    "runnerup": "pavement",
+    "w_idx": 5,
+    "ru_idx": 3,
+    "n_cc": 1479,
+    "n_pixel": 84666,
+    "rescue_rate": 0.4096
+  },
+  {
+    "winner": "road",
+    "runnerup": "bareland",
+    "w_idx": 4,
+    "ru_idx": 1,
+    "n_cc": 1370,
+    "n_pixel": 225713,
+    "rescue_rate": 0.0043
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "tree",
+    "w_idx": 1,
+    "ru_idx": 5,
+    "n_cc": 1262,
+    "n_pixel": 199386,
+    "rescue_rate": 0.1098
+  },
+  {
+    "winner": "tree",
+    "runnerup": "road",
+    "w_idx": 5,
+    "ru_idx": 4,
+    "n_cc": 1103,
+    "n_pixel": 80393,
+    "rescue_rate": 0.1151
+  },
+  {
+    "winner": "building",
+    "runnerup": "tree",
+    "w_idx": 8,
+    "ru_idx": 5,
+    "n_cc": 965,
+    "n_pixel": 61494,
+    "rescue_rate": 0.1356
+  },
+  {
+    "winner": "building",
+    "runnerup": "cropland",
+    "w_idx": 8,
+    "ru_idx": 7,
+    "n_cc": 843,
+    "n_pixel": 126658,
+    "rescue_rate": 0.1217
+  },
+  {
+    "winner": "tree",
+    "runnerup": "building",
+    "w_idx": 5,
+    "ru_idx": 8,
+    "n_cc": 823,
+    "n_pixel": 51620,
+    "rescue_rate": 0.0985
+  },
+  {
+    "winner": "bareland",
+    "runnerup": "building",
+    "w_idx": 1,
+    "ru_idx": 8,
+    "n_cc": 790,
+    "n_pixel": 94353,
+    "rescue_rate": 0.0174
+  },
+  {
+    "winner": "pavement",
+    "runnerup": "tree",
+    "w_idx": 3,
+    "ru_idx": 5,
+    "n_cc": 705,
+    "n_pixel": 46647,
+    "rescue_rate": 0.0651
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "building",
+    "w_idx": 7,
+    "ru_idx": 8,
+    "n_cc": 680,
+    "n_pixel": 101707,
+    "rescue_rate": 0.0703
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "pavement",
+    "w_idx": 7,
+    "ru_idx": 3,
+    "n_cc": 590,
+    "n_pixel": 113167,
+    "rescue_rate": 0.7526
+  },
+  {
+    "winner": "cropland",
+    "runnerup": "road",
+    "w_idx": 7,
+    "ru_idx": 4,
+    "n_cc": 570,
+    "n_pixel": 108732,
+    "rescue_rate": 0.0733
+  },
+  {
+    "winner": "pavement",
+    "runnerup": "cropland",
+    "w_idx": 3,
+    "ru_idx": 7,
+    "n_cc": 542,
+    "n_pixel": 89973,
+    "rescue_rate": 0.0873
+  },
+  {
+    "winner": "road",
+    "runnerup": "grass",
+    "w_idx": 4,
+    "ru_idx": 2,
+    "n_cc": 490,
+    "n_pixel": 30073,
+    "rescue_rate": 0.5182
+  },
+  {
+    "winner": "road",
+    "runnerup": "building",
+    "w_idx": 4,
+    "ru_idx": 8,
+    "n_cc": 438,
+    "n_pixel": 30680,
+    "rescue_rate": 0.1463
+  },
+  {
+    "winner": "road",
+    "runnerup": "cropland",
+    "w_idx": 4,
+    "ru_idx": 7,
+    "n_cc": 393,
+    "n_pixel": 50558,
+    "rescue_rate": 0.0749
+  },
+  {
+    "winner": "grass",
+    "runnerup": "water",
+    "w_idx": 2,
+    "ru_idx": 6,
+    "n_cc": 329,
+    "n_pixel": 41941,
+    "rescue_rate": 0.4461
+  },
+  {
+    "winner": "water",
+    "runnerup": "road",
+    "w_idx": 6,
+    "ru_idx": 4,
+    "n_cc": 290,
+    "n_pixel": 42527,
+    "rescue_rate": 0.0543
+  },
+  {
+    "winner": "road",
+    "runnerup": "tree",
+    "w_idx": 4,
+    "ru_idx": 5,
+    "n_cc": 289,
+    "n_pixel": 25935,
+    "rescue_rate": 0.0869
+  },
+  {
+    "winner": "water",
+    "runnerup": "grass",
+    "w_idx": 6,
+    "ru_idx": 2,
+    "n_cc": 235,
+    "n_pixel": 61242,
+    "rescue_rate": 0.103
+  },
+  {
+    "winner": "water",
+    "runnerup": "pavement",
+    "w_idx": 6,
+    "ru_idx": 3,
+    "n_cc": 232,
+    "n_pixel": 34716,
+    "rescue_rate": 0.6182
+  },
+  {
+    "winner": "building",
+    "runnerup": "water",
+    "w_idx": 8,
+    "ru_idx": 6,
+    "n_cc": 230,
+    "n_pixel": 30301,
+    "rescue_rate": 0.2048
+  }
+]

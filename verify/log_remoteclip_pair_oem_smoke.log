@@ -1,0 +1,80 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/torch/serialization.py:1074: UserWarning: 'torch.load' received a zip file that looks like a TorchScript archive dispatching to 'torch.jit.load' (call 'torch.jit.load' directly to silence this warning)
+  warnings.warn("'torch.load' received a zip file that looks like a TorchScript archive"
+Device: cuda
+Loading CLIP from /home/108/u108008/code/SegEarth-OV-3/weights/clip/ViT-B-32.pt ...
+Loading RemoteCLIP from /home/108/u108008/code/SegEarth-OV-3/weights/RemoteCLIP/RemoteCLIP-ViT-B-32.pt ...
+Config  : configs/cfg_openearthmap.py
+Classes (9): ['background', 'bareland', 'grass', 'pavement', 'road', 'tree', 'water', 'cropland', 'building']
+margin_thr: 0.1  |  delta sweep: [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2, 0.3]
+Limit: 20
+  CLIP text features: torch.Size([9, 512])
+  RemoteCLIP text features: torch.Size([9, 512])
+  processed 20 images ...
+
+Total images: 20
+Baseline mIoU: 32.89%
+
+================================================================================
+Pair: grass -> cropland   (margin_thr=0.1)
+  CC patches collected: 981
+
+  [CLIP] 981 CC patches: rescue=471 correct=379 other=131
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU
+    -0.10     981      0.0%      0.480      1.000     1.58
+    -0.05     981      0.0%      0.480      1.000     1.58
+     0.00     219     77.7%      0.443      0.206     0.68
+     0.05       0    100.0%        nan      0.000     0.00
+     0.10       0    100.0%        nan      0.000     0.00
+     0.15       0    100.0%        nan      0.000     0.00
+     0.20       0    100.0%        nan      0.000     0.00
+     0.30       0    100.0%        nan      0.000     0.00
+  => best delta=-0.10: ΔmIoU=+1.576  prec=0.480  rec=1.000  abstain=0.0%
+
+  [RemoteCLIP] 981 CC patches: rescue=471 correct=379 other=131
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU
+    -0.10     981      0.0%      0.480      1.000     1.58
+    -0.05     980      0.1%      0.480      0.998     1.47
+     0.00     944      3.8%      0.472      0.947     0.36
+     0.05       0    100.0%        nan      0.000     0.00
+     0.10       0    100.0%        nan      0.000     0.00
+     0.15       0    100.0%        nan      0.000     0.00
+     0.20       0    100.0%        nan      0.000     0.00
+     0.30       0    100.0%        nan      0.000     0.00
+  => best delta=-0.10: ΔmIoU=+1.576  prec=0.480  rec=1.000  abstain=0.0%
+================================================================================
+Pair: building -> pavement   (margin_thr=0.1)
+  CC patches collected: 811
+
+  [CLIP] 811 CC patches: rescue=557 correct=193 other=61
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU
+    -0.10     811      0.0%      0.687      1.000     0.12
+    -0.05     811      0.0%      0.687      1.000     0.12
+     0.00     285     64.9%      0.684      0.350     0.05
+     0.05       0    100.0%        nan      0.000     0.00
+     0.10       0    100.0%        nan      0.000     0.00
+     0.15       0    100.0%        nan      0.000     0.00
+     0.20       0    100.0%        nan      0.000     0.00
+     0.30       0    100.0%        nan      0.000     0.00
+  => best delta=-0.10: ΔmIoU=+0.123  prec=0.687  rec=1.000  abstain=0.0%
+
+  [RemoteCLIP] 811 CC patches: rescue=557 correct=193 other=61
+    delta  n_flip  abs_rate  flip_prec   flip_rec    ΔmIoU
+    -0.10     811      0.0%      0.687      1.000     0.12
+    -0.05     811      0.0%      0.687      1.000     0.12
+     0.00     650     19.9%      0.685      0.799     0.10
+     0.05       0    100.0%        nan      0.000     0.00
+     0.10       0    100.0%        nan      0.000     0.00
+     0.15       0    100.0%        nan      0.000     0.00
+     0.20       0    100.0%        nan      0.000     0.00
+     0.30       0    100.0%        nan      0.000     0.00
+  => best delta=-0.10: ΔmIoU=+0.123  prec=0.687  rec=1.000  abstain=0.0%
+================================================================================
+
+Cross-model summary (best delta per pair):
+  pair                              CLIP ΔmIoU     CLIP prec  RemoteCLIP ΔmIoU  RemoteCLIP prec
+  grass -> cropland                     +1.576         0.480          +1.576         0.480
+  building -> pavement                  +0.123         0.687          +0.123         0.687
+
+Done.

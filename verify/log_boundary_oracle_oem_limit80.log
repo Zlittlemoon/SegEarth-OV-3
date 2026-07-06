@@ -1,0 +1,109 @@
+/home/108/u108008/miniconda3/envs/segov3/lib/python3.9/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import \
+Device: cuda
+Config: configs/cfg_openearthmap.py
+margin_thr=0.1  min_cc=16  bbox_pad=4
+Limit: 80
+  processed 20 images ...
+  processed 40 images ...
+  processed 60 images ...
+  processed 80 images ...
+
+Total images: 80
+Baseline mIoU: 45.78%
+
+================================================================================
+Boundary Oracle Results
+================================================================================
+
+  Oracle 1 (label-only flip): flip all CC pixels winner->runnerup
+  Oracle 2 (boundary replace): only flip GT==runnerup pixels within CC
+    Gap O2-O1 = value of having perfect CC boundary (what SAM3 refine can gain)
+  Oracle 3 (local GT coverage): Oracle 2 + GT-runnerup pixels in bbox outside CC
+    Gap O3-O2 = value of picking up missed GT-runnerup pixels near CC
+
+Pair: grass -> cropland
+  CCs: total=2891  rescue=1199  correct=1333  other=359
+
+  Oracle                              mIoU     ΔmIoU
+  --------------------------------------------------
+  Baseline                          45.777          
+  O1: label-only flip               47.103    +1.326
+  O2: boundary replace              47.122    +1.345
+  O3: local GT coverage             47.616    +1.839
+
+  Gap O2-O1 (boundary value):        +0.019 mIoU
+  Gap O3-O2 (local coverage value):   +0.494 mIoU
+
+  Verdict: Boundary value is negligible (<0.05 mIoU). Problem is semantic label, not boundary shape. SAM3 geometry refinement NOT recommended for this pair.
+
+--------------------------------------------------------------------------------
+
+Pair: building -> pavement
+  CCs: total=4303  rescue=3176  correct=750  other=377
+
+  Oracle                              mIoU     ΔmIoU
+  --------------------------------------------------
+  Baseline                          45.777          
+  O1: label-only flip               46.051    +0.275
+  O2: boundary replace              46.054    +0.277
+  O3: local GT coverage             46.417    +0.640
+
+  Gap O2-O1 (boundary value):        +0.003 mIoU
+  Gap O3-O2 (local coverage value):   +0.363 mIoU
+
+  Verdict: Boundary value is negligible (<0.05 mIoU). Problem is semantic label, not boundary shape. SAM3 geometry refinement NOT recommended for this pair.
+
+--------------------------------------------------------------------------------
+
+Pair: bareland -> pavement
+  CCs: total=1466  rescue=1259  correct=0  other=207
+
+  Oracle                              mIoU     ΔmIoU
+  --------------------------------------------------
+  Baseline                          45.777          
+  O1: label-only flip               46.198    +0.422
+  O2: boundary replace              46.194    +0.417
+  O3: local GT coverage             46.680    +0.903
+
+  Gap O2-O1 (boundary value):        -0.005 mIoU
+  Gap O3-O2 (local coverage value):   +0.486 mIoU
+
+  Verdict: Boundary value is negligible (<0.05 mIoU). Problem is semantic label, not boundary shape. SAM3 geometry refinement NOT recommended for this pair.
+
+--------------------------------------------------------------------------------
+
+Pair: bareland -> grass
+  CCs: total=958  rescue=378  correct=20  other=560
+
+  Oracle                              mIoU     ΔmIoU
+  --------------------------------------------------
+  Baseline                          45.777          
+  O1: label-only flip               45.917    +0.141
+  O2: boundary replace              45.915    +0.139
+  O3: local GT coverage             45.975    +0.198
+
+  Gap O2-O1 (boundary value):        -0.002 mIoU
+  Gap O3-O2 (local coverage value):   +0.060 mIoU
+
+  Verdict: Boundary value is negligible (<0.05 mIoU). Problem is semantic label, not boundary shape. SAM3 geometry refinement NOT recommended for this pair.
+
+--------------------------------------------------------------------------------
+
+================================================================================
+Cross-pair summary:
+
+  pair                             n_rescue    O1 ΔmIoU    O2 ΔmIoU    O3 ΔmIoU   gap O2-O1     gap%
+  -------------------------------------------------------------------------------------
+  grass -> cropland                    1199      +1.326      +1.345      +1.839      +0.019     1.4%
+  building -> pavement                 3176      +0.275      +0.277      +0.640      +0.003     0.9%
+  bareland -> pavement                 1259      +0.422      +0.417      +0.903      -0.005    -1.2%
+  bareland -> grass                     378      +0.141      +0.139      +0.198      -0.002    -1.2%
+
+gap O2-O1 = value of perfect boundary (SAM3 geometry refinement upper bound)
+gap% = gap as fraction of label-only gain
+
+Interpretation:
+  gap% < 10%  -> boundary negligible, focus on semantic label correction only
+  gap% 10-30% -> boundary has some value, SAM3 refine optional
+  gap% > 30%  -> boundary matters, SAM3 geometry refinement justified
